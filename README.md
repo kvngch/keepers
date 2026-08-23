@@ -10,8 +10,8 @@ n'embarque aucun SDK tiers de mesure.
 Télécharger le dernier APK depuis la page
 [Releases](https://github.com/kvngch/keepers/releases), puis l'installer sur un appareil
 Android 8.0 ou plus récent (arm64, l'installation de sources inconnues doit être autorisée).
-Chaque release inclut l'empreinte SHA-256 de l'APK. L'APK est volumineux (~120 Mo) car il
-embarque le modèle de recherche sémantique : c'est le prix du 100 % local.
+Chaque release inclut l'empreinte SHA-256 de l'APK (~35 Mo : modèles OCR et de recherche
+sémantique embarqués, c'est le prix du 100 % local).
 
 Pour recevoir les mises à jour automatiquement, ajouter le dépôt dans
 [Obtainium](https://github.com/ImranR98/Obtainium) avec l'URL `https://github.com/kvngch/keepers`.
