@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="scan"
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_shield"
+        android:shortcutShortLabel="@string/shortcut_scan">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="fr.kvngch.keepers"
+            android:targetClass="fr.kvngch.keepers.MainActivity">
+            <extra
+                android:name="keepers_action"
+                android:value="scan" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="note"
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_shield"
+        android:shortcutShortLabel="@string/shortcut_note">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="fr.kvngch.keepers"
+            android:targetClass="fr.kvngch.keepers.MainActivity">
+            <extra
+                android:name="keepers_action"
+                android:value="note" />
+        </intent>
+    </shortcut>
+</shortcuts>

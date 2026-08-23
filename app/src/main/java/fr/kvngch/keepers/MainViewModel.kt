@@ -1,133 +1,246 @@
 package fr.kvngch.keepers
 
 import android.app.Application
-import android.graphics.Bitmap
-import android.graphics.Color
-import android.graphics.Matrix
-import android.graphics.pdf.PdfRenderer
 import android.net.Uri
-import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import androidx.work.WorkManager
 import fr.kvngch.keepers.data.AppDb
+import fr.kvngch.keepers.data.EncFile
 import fr.kvngch.keepers.data.ItemEntity
+import fr.kvngch.keepers.data.ItemFts
 import java.io.File
-import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
+
+enum class TypeFilter(val label: String) {
+    ALL("Tous"), NOTES("Notes"), IMAGES("Images"), PDF("PDF"), OTHER("Autres")
+}
+
+enum class RangeFilter(val days: Long?, val label: String) {
+    ALL(null, "Période : tout"), WEEK(7, "Période : 7 j"),
+    MONTH(30, "Période : 30 j"), YEAR(365, "Période : 12 mois")
+}
+
+enum class Sort(val label: String) {
+    RECENT("Tri : récent"), OLD("Tri : ancien"), TITLE("Tri : titre")
+}
+
+data class Filters(
+    val type: TypeFilter = TypeFilter.ALL,
+    val range: RangeFilter = RangeFilter.ALL,
+    val sort: Sort = Sort.RECENT,
+    val trash: Boolean = false
+)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val dao = AppDb.get(app).itemDao()
     private val docsDir = File(app.filesDir, "docs").apply { mkdirs() }
-    private val recognizer by lazy {
-        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-    }
 
     val query = MutableStateFlow("")
-    val processing = MutableStateFlow<String?>(null)
+    val filters = MutableStateFlow(Filters())
+    private val processing = MutableStateFlow<String?>(null)
 
-    val items: StateFlow<List<ItemEntity>> = query
-        .flatMapLatest { q -> if (q.isBlank()) dao.all() else dao.search(q.trim()) }
+    private val working: Flow<Boolean> = WorkManager.getInstance(app)
+        .getWorkInfosByTagFlow(IndexWorker.TAG)
+        .map { infos -> infos.any { !it.state.isFinished } }
+
+    val banner: StateFlow<String?> = combine(processing, working) { p, w ->
+        p ?: if (w) "Analyse et indexation locales en cours..." else null
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val items: StateFlow<List<ItemEntity>> = combine(query, filters) { q, f -> q to f }
+        .flatMapLatest { (q, f) ->
+            val base = when {
+                f.trash -> dao.trash()
+                q.isBlank() -> dao.all()
+                else -> {
+                    val match = ftsQuery(q)
+                    if (match.isBlank()) dao.all() else dao.searchFts(match)
+                }
+            }
+            base.map { list -> applyFilters(list, f) }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            // corbeille : purge definitive apres 30 jours
+            dao.purgeable(System.currentTimeMillis() - 30L * 86_400_000)
+                .forEach { deleteForeverInternal(it) }
+            // migration < 2.0.0 : chiffre les fichiers stockes en clair
+            dao.unencryptedFiles().forEach { item ->
+                runCatching {
+                    EncFile.encryptInPlace(getApplication(), File(item.filePath!!))
+                    dao.update(item.copy(fileEnc = true))
+                }
+            }
+        }
+    }
 
     fun setQuery(q: String) {
         query.value = q
     }
+
+    fun setType(t: TypeFilter) {
+        filters.value = filters.value.copy(type = t)
+    }
+
+    fun cycleRange() {
+        filters.value = filters.value.copy(range = next(RangeFilter.entries, filters.value.range))
+    }
+
+    fun cycleSort() {
+        filters.value = filters.value.copy(sort = next(Sort.entries, filters.value.sort))
+    }
+
+    fun toggleTrash() {
+        filters.value = filters.value.copy(trash = !filters.value.trash)
+    }
+
+    private fun <T> next(all: List<T>, cur: T): T = all[(all.indexOf(cur) + 1) % all.size]
+
+    private fun applyFilters(list: List<ItemEntity>, f: Filters): List<ItemEntity> {
+        var l = when (f.type) {
+            TypeFilter.ALL -> list
+            TypeFilter.NOTES -> list.filter { it.filePath == null }
+            TypeFilter.IMAGES -> list.filter { Indexer.isImage(it.format) }
+            TypeFilter.PDF -> list.filter { it.format == ".pdf" }
+            TypeFilter.OTHER -> list.filter {
+                it.filePath != null && !Indexer.isImage(it.format) && it.format != ".pdf"
+            }
+        }
+        f.range.days?.let { d ->
+            val min = System.currentTimeMillis() - d * 86_400_000
+            l = l.filter { it.addedAt >= min }
+        }
+        return when (f.sort) {
+            Sort.RECENT -> l.sortedByDescending { it.addedAt }
+            Sort.OLD -> l.sortedBy { it.addedAt }
+            Sort.TITLE -> l.sortedBy { it.title.lowercase() }
+        }
+    }
+
+    private fun ftsQuery(raw: String): String = raw
+        .split(Regex("\\s+"))
+        .mapNotNull { t -> t.replace(Regex("[^\\p{L}\\p{N}]"), "").ifBlank { null } }
+        .joinToString(" ") { "$it*" }
 
     fun newCaptureFile(): File = File(docsDir, "scan-${System.currentTimeMillis()}.jpg")
 
     fun addNote(title: String, body: String) {
         viewModelScope.launch(Dispatchers.IO) {
             withBanner("Indexation de la note en cours...") {
-                val cleanTitle = title.ifBlank { body.lineSequence().first().take(60) }
-                dao.insert(
-                    ItemEntity(
-                        title = cleanTitle,
-                        format = ".txt",
-                        sizeBytes = body.toByteArray().size.toLong(),
-                        addedAt = System.currentTimeMillis(),
-                        summary = summarize(body),
-                        content = body,
-                        indexed = true,
-                        filePath = null
-                    )
+                val a = Indexer.analyze(body)
+                val item = ItemEntity(
+                    title = title.ifBlank { body.lineSequence().first().take(60) },
+                    format = ".txt",
+                    sizeBytes = body.toByteArray().size.toLong(),
+                    addedAt = System.currentTimeMillis(),
+                    summary = a.summary,
+                    content = body,
+                    indexed = true,
+                    filePath = null,
+                    extracted = a.extracted,
+                    dueDate = a.dueDate
+                )
+                val id = dao.insert(item)
+                dao.upsertFts(ItemFts(id, item.title, item.summary, item.content))
+            }
+        }
+    }
+
+    fun updateNote(item: ItemEntity, title: String, body: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val a = Indexer.analyze(body)
+            val updated = item.copy(
+                title = title.ifBlank { item.title },
+                content = body,
+                summary = a.summary,
+                extracted = a.extracted,
+                dueDate = a.dueDate,
+                sizeBytes = body.toByteArray().size.toLong()
+            )
+            dao.update(updated)
+            dao.upsertFts(ItemFts(item.id, updated.title, updated.summary, updated.content))
+        }
+    }
+
+    fun importFiles(uris: List<Uri>) {
+        uris.forEach { importFile(it) }
+    }
+
+    fun importFile(uri: Uri, defaultName: String? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            withBanner("Copie locale du document...") {
+                val resolver = getApplication<Application>().contentResolver
+                var name = defaultName ?: "document-${System.currentTimeMillis()}"
+                var size = 0L
+                runCatching {
+                    resolver.query(uri, null, null, null, null)?.use { c ->
+                        if (c.moveToFirst()) {
+                            val nameIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            val sizeIdx = c.getColumnIndex(OpenableColumns.SIZE)
+                            if (nameIdx >= 0) name = c.getString(nameIdx) ?: name
+                            if (sizeIdx >= 0 && !c.isNull(sizeIdx)) size = c.getLong(sizeIdx)
+                        }
+                    }
+                }
+                val dest = File(docsDir, "${System.currentTimeMillis()}-${name.replace('/', '_')}")
+                val copied = runCatching {
+                    resolver.openInputStream(uri)?.use { input ->
+                        dest.outputStream().use { input.copyTo(it) }
+                    } != null
+                }.getOrDefault(false)
+                if (!copied) {
+                    dest.delete()
+                    processing.value = "Échec de la lecture du fichier."
+                    delay(1_500)
+                    return@withBanner
+                }
+                if (size == 0L) size = dest.length()
+                val ext = name.substringAfterLast('.', "").lowercase()
+                ingest(
+                    dest,
+                    name.substringBeforeLast('.'),
+                    if (ext.isBlank()) "fichier" else ".$ext",
+                    size
                 )
             }
         }
     }
 
-    fun importFile(uri: Uri) {
+    // Pages JPEG renvoyees par le scanner de documents
+    fun importCapture(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
-            withBanner("Copie et analyse locales du fichier...") {
-                val resolver = getApplication<Application>().contentResolver
-                var name = "document"
-                var size = 0L
-                resolver.query(uri, null, null, null, null)?.use { c ->
-                    if (c.moveToFirst()) {
-                        val nameIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                        val sizeIdx = c.getColumnIndex(OpenableColumns.SIZE)
-                        if (nameIdx >= 0) name = c.getString(nameIdx) ?: name
-                        if (sizeIdx >= 0 && !c.isNull(sizeIdx)) size = c.getLong(sizeIdx)
+            withBanner("Extraction des données du document en cours...") {
+                val dest = newCaptureFile()
+                runCatching {
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { i ->
+                        dest.outputStream().use { i.copyTo(it) }
                     }
                 }
-                val ext = name.substringAfterLast('.', "").lowercase()
-                val dest = File(docsDir, "${System.currentTimeMillis()}-$name")
-                resolver.openInputStream(uri)?.use { input ->
-                    dest.outputStream().use { input.copyTo(it) }
-                }
-                if (size == 0L) size = dest.length()
-
-                val mime = resolver.getType(uri) ?: ""
-                val textual = mime.startsWith("text/") ||
-                    ext in setOf("txt", "md", "csv", "json", "log")
-                val image = mime.startsWith("image/") ||
-                    ext in setOf("jpg", "jpeg", "png", "webp", "bmp")
-                val pdf = mime == "application/pdf" || ext == "pdf"
-                val content = when {
-                    textual && size <= 5_000_000 ->
-                        runCatching { dest.readText().take(100_000) }.getOrDefault("")
-                    pdf -> {
-                        processing.value = "Analyse des pages du PDF (OCR local) en cours..."
-                        pdfText(dest)
-                    }
-                    image -> {
-                        processing.value = "Reconnaissance du texte (OCR local) en cours..."
-                        ocr(dest)
-                    }
-                    else -> ""
-                }
-
-                processing.value = "Extraction des données du document en cours..."
-                dao.insert(
-                    ItemEntity(
-                        title = name.substringBeforeLast('.'),
-                        format = if (ext.isBlank()) "fichier" else ".$ext",
-                        sizeBytes = size,
-                        addedAt = System.currentTimeMillis(),
-                        summary = when {
-                            content.isNotBlank() -> summarize(content)
-                            image || pdf -> "Document stocké localement, aucun texte détecté par l'OCR."
-                            else -> "Fichier stocké localement. Métadonnées indexées, contenu non extrait."
-                        },
-                        content = content,
-                        indexed = true,
-                        filePath = dest.absolutePath
+                if (dest.exists() && dest.length() > 0) {
+                    ingest(
+                        dest,
+                        "Capture du ${Formats.dateTime(System.currentTimeMillis())}",
+                        ".jpg",
+                        dest.length()
                     )
-                )
+                }
             }
         }
     }
@@ -135,100 +248,99 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun ingestCapture(file: File) {
         viewModelScope.launch(Dispatchers.IO) {
             withBanner("Extraction des données du reçu en cours...") {
-                val content = ocr(file)
-                dao.insert(
-                    ItemEntity(
-                        title = "Capture du ${Formats.dateTime(System.currentTimeMillis())}",
-                        format = ".jpg",
-                        sizeBytes = file.length(),
-                        addedAt = System.currentTimeMillis(),
-                        summary = if (content.isNotBlank()) summarize(content)
-                        else "Capture photo stockée localement, aucun texte détecté par l'OCR.",
-                        content = content,
-                        indexed = true,
-                        filePath = file.absolutePath
-                    )
+                ingest(
+                    file,
+                    "Capture du ${Formats.dateTime(System.currentTimeMillis())}",
+                    ".jpg",
+                    file.length()
                 )
             }
         }
     }
 
-    fun delete(item: ItemEntity) {
+    private suspend fun ingest(file: File, title: String, format: String, size: Long) {
+        val sha = Indexer.sha256(file)
+        if (dao.bySha(sha) != null) {
+            file.delete()
+            processing.value = "Document déjà présent dans le coffre."
+            delay(1_500)
+            return
+        }
+        if (format == ".jpg" || format == ".jpeg") Indexer.stripGps(file)
+        EncFile.encryptInPlace(getApplication(), file)
+        val item = ItemEntity(
+            title = title,
+            format = format,
+            sizeBytes = size,
+            addedAt = System.currentTimeMillis(),
+            summary = "Indexation locale en cours...",
+            content = "",
+            indexed = false,
+            filePath = file.absolutePath,
+            sha256 = sha,
+            fileEnc = true
+        )
+        val id = dao.insert(item)
+        dao.upsertFts(ItemFts(id, title, "", ""))
+        IndexWorker.enqueue(getApplication(), id)
+    }
+
+    fun moveToTrash(item: ItemEntity) {
         viewModelScope.launch(Dispatchers.IO) {
-            item.filePath?.let { File(it).delete() }
-            dao.delete(item)
+            dao.moveToTrash(item.id, System.currentTimeMillis())
         }
     }
 
-    private suspend fun ocr(file: File): String = suspendCancellableCoroutine { cont ->
-        val input = runCatching {
-            InputImage.fromFilePath(getApplication(), Uri.fromFile(file))
-        }.getOrNull()
-        if (input == null) {
-            cont.resume("")
-            return@suspendCancellableCoroutine
-        }
-        recognizer.process(input)
-            .addOnSuccessListener { cont.resume(it.text.take(100_000)) }
-            .addOnFailureListener { cont.resume("") }
+    fun restoreFromTrash(item: ItemEntity) {
+        viewModelScope.launch(Dispatchers.IO) { dao.restoreFromTrash(item.id) }
     }
 
-    private suspend fun ocrBitmap(bitmap: Bitmap): String =
-        suspendCancellableCoroutine { cont ->
-            recognizer.process(InputImage.fromBitmap(bitmap, 0))
-                .addOnSuccessListener { cont.resume(it.text) }
-                .addOnFailureListener { cont.resume("") }
-        }
+    fun deleteForever(item: ItemEntity) {
+        viewModelScope.launch(Dispatchers.IO) { deleteForeverInternal(item) }
+    }
 
-    // PDF numerique ou scanne : chaque page est rendue par PdfRenderer puis passee a
-    // l'OCR local, aucune dependance de parsing supplementaire.
-    private suspend fun pdfText(file: File): String {
-        val sb = StringBuilder()
-        runCatching {
-            ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                PdfRenderer(pfd).use { renderer ->
-                    // ponytail: cap a 10 pages pour borner temps et memoire; a relever
-                    // si des documents longs doivent etre indexes en entier
-                    val pages = minOf(renderer.pageCount, 10)
-                    for (i in 0 until pages) {
-                        val page = renderer.openPage(i)
-                        try {
-                            val scale = 2f
-                            val bitmap = Bitmap.createBitmap(
-                                (page.width * scale).toInt(),
-                                (page.height * scale).toInt(),
-                                Bitmap.Config.ARGB_8888
-                            )
-                            bitmap.eraseColor(Color.WHITE)
-                            val matrix = Matrix().apply { setScale(scale, scale) }
-                            page.render(
-                                bitmap, null, matrix,
-                                PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
-                            )
-                            sb.append(ocrBitmap(bitmap)).append('\n')
-                            bitmap.recycle()
-                        } finally {
-                            page.close()
-                        }
-                    }
+    private suspend fun deleteForeverInternal(item: ItemEntity) {
+        item.filePath?.let { File(it).delete() }
+        dao.deleteFts(item.id)
+        dao.delete(item)
+    }
+
+    fun exportVault(uri: Uri, password: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            processing.value = "Export chiffré du coffre en cours..."
+            val result = runCatching {
+                getApplication<Application>().contentResolver.openOutputStream(uri)?.use { out ->
+                    Vault.export(getApplication(), dao, out, password.toCharArray())
                 }
             }
+            processing.value = if (result.isSuccess) "Export terminé." else "Échec de l'export."
+            delay(2_000)
+            processing.value = null
         }
-        return sb.toString().trim().take(100_000)
     }
 
-    override fun onCleared() {
-        recognizer.close()
+    fun restoreVault(uri: Uri, password: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            processing.value = "Restauration du coffre en cours..."
+            val result = runCatching {
+                getApplication<Application>().contentResolver.openInputStream(uri)?.use { ins ->
+                    Vault.restore(getApplication(), dao, ins, password.toCharArray(), docsDir)
+                } ?: 0
+            }
+            processing.value = result.fold(
+                { "$it éléments restaurés." },
+                { "Échec de la restauration (mot de passe ?)." }
+            )
+            delay(2_500)
+            processing.value = null
+        }
     }
-
-    private fun summarize(text: String): String =
-        text.trim().replace(Regex("\\s+"), " ").take(160)
 
     private suspend fun withBanner(message: String, block: suspend () -> Unit) {
         processing.value = message
         try {
             block()
-            delay(1_200)
+            delay(800)
         } finally {
             processing.value = null
         }

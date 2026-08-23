@@ -21,7 +21,16 @@ object DbKey {
     private const val PREFS = "keepers_sec"
     private const val ENTRY = "db_key"
 
+    @Volatile
+    private var cached: ByteArray? = null
+
+    @Synchronized
     fun passphrase(context: Context, dbFile: File): ByteArray {
+        cached?.let { return it }
+        return computePassphrase(context, dbFile).also { cached = it }
+    }
+
+    private fun computePassphrase(context: Context, dbFile: File): ByteArray {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs.getString(ENTRY, null)?.let { return decrypt(it) }
         val raw = ByteArray(32).also { SecureRandom().nextBytes(it) }

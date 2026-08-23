@@ -9,33 +9,45 @@ n'embarque aucun SDK tiers de mesure.
 
 Télécharger le dernier APK depuis la page
 [Releases](https://github.com/kvngch/keepers/releases), puis l'installer sur un appareil
-Android 8.0 ou plus récent (l'installation de sources inconnues doit être autorisée).
+Android 8.0 ou plus récent (arm64, l'installation de sources inconnues doit être autorisée).
 Chaque release inclut l'empreinte SHA-256 de l'APK.
+
+Pour recevoir les mises à jour automatiquement, ajouter le dépôt dans
+[Obtainium](https://github.com/ImranR98/Obtainium) avec l'URL `https://github.com/kvngch/keepers`.
 
 ## Fonctionnalités
 
-- Recherche en langage naturel sur les titres, résumés et contenus, exécutée localement
-- Ingestion par capture photo, import de fichier ou note rapide (bouton flottant)
-- Extraction et indexation locales du texte des fichiers importés
+- Recherche plein texte instantanée (index FTS local, insensible aux accents) sur les
+  titres, résumés et contenus
+- Filtres par type (notes, images, PDF), par période, tri, regroupement par mois
+- Scanner de documents (recadrage automatique, multi-pages) avec repli sur l'appareil
+  photo, import multiple de fichiers, note rapide, partage vers Keepers depuis
+  n'importe quelle application
 - OCR on-device (ML Kit Text Recognition, modèle embarqué dans l'APK) sur les captures
-  photo et les images importées : le texte reconnu devient cherchable
-- Indexation des PDF, numériques comme scannés : les pages (10 premières) sont rendues
-  par le moteur PDF natif d'Android puis passées dans le même OCR local
-- Cartes de documents avec résumé sur deux lignes, métadonnées (date, format, taille) et
-  badge d'indexation
-- Thème Material 3 complet en mode clair et en mode sombre (fonds mats pensés pour OLED),
+  et les images importées; PDF numériques et scannés indexés page par page (10 premières)
+- Extraction automatique des montants, dates et IBAN; les échéances détectées déclenchent
+  une notification locale 7 jours avant
+- Visionneuse interne (images zoomables, PDF, texte), miniatures sur les cartes,
+  édition des notes
+- Corbeille avec purge automatique après 30 jours
+- Sauvegarde portable chiffrée par mot de passe (export et restauration)
+- Widget de capture et raccourcis d'icône (appui long)
+- Thème Material 3 complet en mode clair et sombre (fonds mats pensés pour OLED),
   accents vert minéral, métadonnées en police monospace
 
-## Confidentialité
+## Confidentialité et sécurité
 
-Le stockage se fait dans l'espace privé de l'application (base Room et fichiers internes).
-La base est chiffrée par SQLCipher (AES-256) avec une passphrase aléatoire protégée par
-une clé non exportable du Keystore Android. Une base créée par une version antérieure est
-migrée vers le format chiffré au premier lancement, sans perte de données.
-Rien ne quitte l'appareil : pas de télémétrie, pas de synchronisation, pas de permission
-Internet dans le manifeste. L'OCR utilise la variante bundled de ML Kit : le modèle est
-inclus dans l'APK et la reconnaissance s'exécute entièrement sur l'appareil, sans
-téléchargement ni Google Play Services.
+- Base de données chiffrée par SQLCipher (AES-256) et fichiers stockés chiffrés (AES/GCM),
+  clés protégées par une clé non exportable du Keystore Android
+- Verrouillage par biométrie ou code de l'appareil à l'ouverture
+- Captures d'écran bloquées, contenu masqué dans les applications récentes
+- Métadonnées de géolocalisation EXIF retirées des images à l'import
+- Pas de permission Internet dans le manifeste : rien ne quitte l'appareil. L'OCR utilise
+  la variante bundled de ML Kit, modèle inclus dans l'APK. Le scanner de documents est
+  fourni par Google Play services quand il est disponible (traitement on-device), sinon
+  l'appareil photo est utilisé.
+- L'ingestion est reprise automatiquement si l'application est interrompue en cours
+  d'indexation (WorkManager)
 
 ## Build
 
@@ -43,5 +55,5 @@ téléchargement ni Google Play Services.
 ./gradlew assembleDebug
 ```
 
-JDK 17 et le SDK Android 35 sont requis. La release signée est produite par le workflow
-GitHub Actions au push d'un tag `v*`.
+JDK 17 et le SDK Android 35 sont requis. Chaque push sur `main` est compilé par la CI, et
+la release signée est produite par le workflow GitHub Actions au push d'un tag `v*`.

@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Keepers</string>
+    <string name="widget_capture">Capturer un document</string>
+    <string name="shortcut_scan">Capturer</string>
+    <string name="shortcut_note">Note rapide</string>
 </resources>
