@@ -13,8 +13,12 @@ android {
         applicationId = "fr.kvngch.keepers"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.1.1"
+        ndk {
+            // APK distribue en sideload : arm64 couvre tous les telephones recents
+            abiFilters += "arm64-v8a"
+        }
     }
 
     signingConfigs {
