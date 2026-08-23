@@ -23,7 +23,8 @@ class DueWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
         if (!nm.areNotificationsEnabled()) return Result.success()
         val dao = AppDb.get(ctx).itemDao()
         val now = System.currentTimeMillis()
-        dao.dueSoon(now, now + 7L * 86_400_000).forEach { item ->
+        val lead = Prefs.dueLeadDays(ctx).toLong()
+        dao.dueSoon(now, now + lead * 86_400_000).forEach { item ->
             val open = PendingIntent.getActivity(
                 ctx, item.id.toInt(),
                 Intent(ctx, MainActivity::class.java),

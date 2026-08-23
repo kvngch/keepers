@@ -34,6 +34,15 @@ class IndexerTest {
     }
 
     @Test
+    fun dateDuDocumentEstLaDatePasseeLaPlusRecente() {
+        val a = Indexer.analyze(
+            "Créé le 05/01/2020, modifié le 12/03/2024, à renouveler le 01/01/2099."
+        )
+        assertNotNull(a.docDate)
+        assertEquals("12/03/2024", Formats.date(a.docDate!!))
+    }
+
+    @Test
     fun extraitMontantsEtIban() {
         val a = Indexer.analyze(
             "Total 1 234,56 € à régler par virement sur FR76 3000 6000 0112 3456 7890 189 avant fin de mois."

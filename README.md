@@ -27,7 +27,18 @@ Pour recevoir les mises à jour automatiquement, ajouter le dépôt dans
   vectorisation) et ouvre la liste des documents en attente avec leur ancienneté;
   les indexations en erreur sont relançables d'un geste
 - Classification automatique locale des documents (factures, reçus, contrats, garanties,
-  banque, impôts, santé, identité, assurance) à partir du texte extrait
+  banque, impôts, santé, identité, assurance) à partir du texte extrait, corrigeable
+  depuis la fiche du document
+- Fiche par document : titre, catégorie, tags libres, date du document (détectée dans le
+  texte, distincte de la date d'ajout, utilisée pour les tris) et échéance modifiable
+- Multi-coffres : plusieurs coffres isolés (base, fichiers et clé propres), bascule
+  depuis le menu
+- Partage sortant vers d'autres applications (déchiffrement temporaire nettoyé au
+  lancement suivant)
+- Mode deux volets sur tablette et grand écran, couleurs dynamiques Material You en
+  option
+- Option de clé renforcée : le déchiffrement exige une authentification de l'appareil
+  datant de moins de 24 heures
 - Menu de navigation : catégories avec compteurs, échéances à venir, corbeille, file de
   traitement, sauvegarde et réglages
 - Filtres par type (notes, images, PDF), par période, tri, regroupement par mois

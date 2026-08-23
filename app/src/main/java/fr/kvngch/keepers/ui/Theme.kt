@@ -1,11 +1,16 @@
 package fr.kvngch.keepers.ui
 
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import fr.kvngch.keepers.Prefs
 
 private val LightScheme = lightColorScheme(
     primary = Color(0xFF1F6B50),
@@ -63,8 +68,14 @@ private val DarkScheme = darkColorScheme(
 
 @Composable
 fun KeepersTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkScheme else LightScheme,
-        content = content
-    )
+    val context = LocalContext.current
+    val dark = isSystemInDarkTheme()
+    val dynamic = Build.VERSION.SDK_INT >= 31 && Prefs.dynamicColor(context)
+    val scheme = when {
+        dynamic && dark -> dynamicDarkColorScheme(context)
+        dynamic -> dynamicLightColorScheme(context)
+        dark -> DarkScheme
+        else -> LightScheme
+    }
+    MaterialTheme(colorScheme = scheme, content = content)
 }

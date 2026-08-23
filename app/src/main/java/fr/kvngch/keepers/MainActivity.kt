@@ -25,6 +25,7 @@ class MainActivity : FragmentActivity() {
     private val vm: MainViewModel by viewModels()
     private val locked = mutableStateOf(true)
     private var stoppedAt = 0L
+    private var shareHandled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,12 +42,17 @@ class MainActivity : FragmentActivity() {
         )
         DueWorker.schedule(this)
         val startAction = intent.getStringExtra("keepers_action")
-        handleShare(intent)
         setContent {
             KeepersTheme {
                 if (locked.value) {
                     LockScreen(onUnlock = ::authenticate)
                 } else {
+                    // le partage entrant n'est traite qu'apres deverrouillage : en mode
+                    // cle renforcee, la base n'est dechiffrable qu'authentifie
+                    if (!shareHandled) {
+                        shareHandled = true
+                        handleShare(intent)
+                    }
                     MainScreen(vm, startAction)
                 }
             }

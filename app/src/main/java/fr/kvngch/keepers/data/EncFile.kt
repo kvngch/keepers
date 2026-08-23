@@ -14,7 +14,7 @@ import javax.crypto.spec.SecretKeySpec
 object EncFile {
 
     private fun key(context: Context): SecretKeySpec =
-        SecretKeySpec(DbKey.passphrase(context, context.getDatabasePath("keepers.db")), "AES")
+        SecretKeySpec(DbKey.passphrase(context, fr.kvngch.keepers.Prefs.vault(context)), "AES")
 
     fun encryptInPlace(context: Context, file: File) {
         val tmp = File(file.path + ".enc")

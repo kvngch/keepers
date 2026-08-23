@@ -48,7 +48,12 @@ object Indexer {
 
     fun isImage(format: String): Boolean = format in IMAGE_EXT
 
-    data class Analysis(val summary: String, val extracted: String, val dueDate: Long?)
+    data class Analysis(
+        val summary: String,
+        val extracted: String,
+        val dueDate: Long?,
+        val docDate: Long?
+    )
 
     suspend fun index(
         context: Context,
@@ -93,14 +98,16 @@ object Indexer {
                 summary = summary,
                 extracted = a.extracted,
                 dueDate = a.dueDate,
+                docDate = a.docDate,
                 thumb = thumb,
                 embedding = embedding?.let(Embedder::toBytes),
-                category = classify(item.title, content, isNote = false).id,
+                category = if (item.catManual) item.category
+                else classify(item.title, content, isNote = false).id,
                 status = "",
                 indexed = true
             )
             dao.update(updated)
-            dao.upsertFts(ItemFts(item.id, updated.title, updated.summary, updated.content))
+            dao.upsertFts(ftsRow(updated))
         } finally {
             plain.delete()
         }
@@ -108,6 +115,10 @@ object Indexer {
 
     fun embeddingText(item: ItemEntity): String =
         item.title + " " + item.content.take(1_000)
+
+    // Les tags sont concatenes au contenu FTS pour etre cherchables
+    fun ftsRow(item: ItemEntity): ItemFts =
+        ItemFts(item.id, item.title, item.summary, (item.content + " " + item.tags).trim())
 
     // Classification par mots-cles ponderes sur le texte extrait.
     // ponytail: heuristique lexicale, remplacable par le classifieur semantique
@@ -164,15 +175,17 @@ object Indexer {
     // Resume extractif local : les deux phrases les plus denses en mots frequents.
     // ponytail: heuristique simple; Gemini Nano (AICore) si un appareil compatible arrive.
     fun analyze(text: String): Analysis {
-        if (text.isBlank()) return Analysis("", "", null)
+        if (text.isBlank()) return Analysis("", "", null, null)
         val now = System.currentTimeMillis()
         val dates = detectDates(text)
         val due = dates.filter { it > now }.minOrNull()
+        // date du document : la date passee la plus recente trouvee dans le texte
+        val docDate = dates.filter { it <= now }.maxOrNull()
         val amounts = AMOUNT.findAll(text).map { it.value.trim() }.distinct().take(3).toList()
         val ibans = IBAN.findAll(text).map { it.value.replace(" ", "") }.distinct().take(1).toList()
         val dateStrs = dates.sorted().map { Formats.date(it) }.distinct().take(3)
         val extracted = (amounts + dateStrs + ibans).joinToString(" · ")
-        return Analysis(summarize(text), extracted, due)
+        return Analysis(summarize(text), extracted, due, docDate)
     }
 
     private fun summarize(text: String): String {

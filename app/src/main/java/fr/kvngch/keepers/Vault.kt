@@ -57,6 +57,10 @@ object Vault {
                     put("content", i.content)
                     put("sha256", i.sha256)
                     put("extracted", i.extracted)
+                    put("category", i.category)
+                    put("tags", i.tags)
+                    put("catManual", i.catManual)
+                    i.docDate?.let { put("docDate", it) }
                     i.dueDate?.let { put("dueDate", it) }
                     i.thumb?.let { put("thumb", Base64.encodeToString(it, Base64.NO_WRAP)) }
                     put("hasFile", i.filePath != null)
@@ -110,13 +114,17 @@ object Vault {
                     filePath = null,
                     sha256 = sha,
                     extracted = o.optString("extracted"),
+                    category = o.optString("category"),
+                    tags = o.optString("tags"),
+                    catManual = o.optBoolean("catManual"),
+                    docDate = if (o.has("docDate")) o.getLong("docDate") else null,
                     dueDate = if (o.has("dueDate")) o.getLong("dueDate") else null,
                     fileEnc = true,
                     thumb = if (o.has("thumb"))
                         Base64.decode(o.getString("thumb"), Base64.NO_WRAP) else null
                 )
                 val id = dao.insert(item)
-                dao.upsertFts(ItemFts(id, item.title, item.summary, item.content))
+                dao.upsertFts(Indexer.ftsRow(item.copy(id = id)))
                 if (o.optBoolean("hasFile")) newIds[o.getLong("id")] = id
                 imported++
             }

@@ -29,8 +29,34 @@ object Prefs {
 
     // Mot de passe des sauvegardes automatiques, chiffre par la cle Keystore
     fun backupPassword(c: Context): String? = p(c).getString("backup_pw", null)
-        ?.let { runCatching { DbKey.reveal(it) }.getOrNull() }
+        ?.let { runCatching { DbKey.reveal(c, it) }.getOrNull() }
+
+    fun rawBackupPassword(c: Context): String? = p(c).getString("backup_pw", null)
 
     fun setBackupPassword(c: Context, v: String) =
-        p(c).edit().putString("backup_pw", DbKey.protect(v)).apply()
+        p(c).edit().putString("backup_pw", DbKey.protect(c, v)).apply()
+
+    // Jours d'avance pour la notification d'echeance
+    fun dueLeadDays(c: Context): Int = p(c).getInt("due_lead", 7)
+    fun setDueLeadDays(c: Context, v: Int) = p(c).edit().putInt("due_lead", v).apply()
+
+    // Couleurs dynamiques Material You (prend effet au prochain demarrage)
+    fun dynamicColor(c: Context): Boolean = p(c).getBoolean("dynamic_color", false)
+    fun setDynamicColor(c: Context, v: Boolean) = p(c).edit().putBoolean("dynamic_color", v).apply()
+
+    // Cle Keystore liee a l'authentification de l'appareil (24 h de validite)
+    fun strongKey(c: Context): Boolean = p(c).getBoolean("strong_key", false)
+    fun setStrongKey(c: Context, v: Boolean) = p(c).edit().putBoolean("strong_key", v).apply()
+
+    // Multi-coffres : identifiants de coffres et coffre courant
+    fun vault(c: Context): String = p(c).getString("vault", "perso") ?: "perso"
+    fun setVault(c: Context, v: String) = p(c).edit().putString("vault", v).apply()
+
+    fun vaults(c: Context): List<String> =
+        (p(c).getString("vaults", "perso") ?: "perso").split(',').filter { it.isNotBlank() }
+
+    fun addVault(c: Context, v: String) {
+        val all = (vaults(c) + v).distinct()
+        p(c).edit().putString("vaults", all.joinToString(",")).apply()
+    }
 }

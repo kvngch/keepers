@@ -43,13 +43,17 @@ data class Filters(
     val sort: Sort = Sort.RECENT,
     val trash: Boolean = false,
     val category: String? = null,
-    val due: Boolean = false
+    val due: Boolean = false,
+    val tag: String? = null
 )
 
 data class NavCounts(
     val total: Int = 0,
     val due: Int = 0,
-    val byCat: Map<String, Int> = emptyMap()
+    val byCat: Map<String, Int> = emptyMap(),
+    val byTag: Map<String, Int> = emptyMap(),
+    val bytes: Long = 0,
+    val nextDue: Long? = null
 )
 
 // semantic = trouve par similarite de sens, pas par les mots-cles
@@ -59,7 +63,8 @@ data class DisplayItem(val item: ItemEntity, val semantic: Boolean = false)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val dao = AppDb.get(app).itemDao()
-    private val docsDir = File(app.filesDir, "docs").apply { mkdirs() }
+    private val docsDir =
+        File(app.filesDir, AppDb.docsDirName(Prefs.vault(app))).apply { mkdirs() }
 
     val query = MutableStateFlow("")
     val filters = MutableStateFlow(Filters())
@@ -69,13 +74,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val pending: StateFlow<List<ItemEntity>> = dao.pending()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    // Compteurs du menu de navigation
+    // Compteurs et statistiques du menu de navigation
     val counts: StateFlow<NavCounts> = dao.all().map { l ->
         val now = System.currentTimeMillis()
         NavCounts(
             total = l.size,
             due = l.count { (it.dueDate ?: 0) > now },
-            byCat = l.groupingBy { it.category.ifBlank { Category.AUTRE.id } }.eachCount()
+            byCat = l.groupingBy { it.category.ifBlank { Category.AUTRE.id } }.eachCount(),
+            byTag = l.flatMap { it.tagList() }.groupingBy { it }.eachCount(),
+            bytes = l.sumOf { it.sizeBytes },
+            nextDue = l.mapNotNull { it.dueDate }.filter { it > now }.minOrNull()
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NavCounts())
 
@@ -126,6 +134,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
+            // nettoyage des copies dechiffrees temporaires du partage sortant
+            File(getApplication<Application>().cacheDir, "share").deleteRecursively()
             // corbeille : purge definitive apres le delai configure
             val days = Prefs.trashDays(getApplication()).toLong()
             dao.purgeable(System.currentTimeMillis() - days * 86_400_000)
@@ -184,11 +194,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setCategory(id: String?) {
-        filters.value = filters.value.copy(category = id, trash = false, due = false)
+        filters.value = filters.value.copy(category = id, trash = false, due = false, tag = null)
+    }
+
+    fun setTag(tag: String?) {
+        filters.value = filters.value.copy(tag = tag, trash = false, due = false, category = null)
     }
 
     fun showDue() {
-        filters.value = filters.value.copy(due = true, trash = false, category = null)
+        filters.value = filters.value.copy(due = true, trash = false, category = null, tag = null)
     }
 
     fun openTrash() {
@@ -196,7 +210,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun resetNav() {
-        filters.value = filters.value.copy(category = null, due = false, trash = false)
+        filters.value =
+            filters.value.copy(category = null, due = false, trash = false, tag = null)
     }
 
     private fun <T> next(all: List<T>, cur: T): T = all[(all.indexOf(cur) + 1) % all.size]
@@ -218,13 +233,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         f.category?.let { c ->
             l = l.filter { it.category.ifBlank { Category.AUTRE.id } == c }
         }
+        f.tag?.let { t ->
+            l = l.filter { t in it.tagList() }
+        }
         if (f.due) {
             val now = System.currentTimeMillis()
             return l.filter { (it.dueDate ?: 0) > now }.sortedBy { it.dueDate }
         }
+        // les tris par date utilisent la date du document quand elle est connue
         return when (f.sort) {
-            Sort.RECENT -> l.sortedByDescending { it.addedAt }
-            Sort.OLD -> l.sortedBy { it.addedAt }
+            Sort.RECENT -> l.sortedByDescending { it.refDate() }
+            Sort.OLD -> l.sortedBy { it.refDate() }
             Sort.TITLE -> l.sortedBy { it.title.lowercase() }
         }
     }
@@ -254,10 +273,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     extracted = a.extracted,
                     dueDate = a.dueDate,
                     embedding = vec?.let(Embedder::toBytes),
-                    category = Category.NOTE.id
+                    category = Category.NOTE.id,
+                    docDate = a.docDate
                 )
                 val id = dao.insert(item)
-                dao.upsertFts(ItemFts(id, item.title, item.summary, item.content))
+                dao.upsertFts(Indexer.ftsRow(item.copy(id = id)))
             }
         }
     }
@@ -273,11 +293,80 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 summary = a.summary,
                 extracted = a.extracted,
                 dueDate = a.dueDate,
+                docDate = a.docDate,
                 sizeBytes = body.toByteArray().size.toLong(),
                 embedding = vec?.let(Embedder::toBytes) ?: item.embedding
             )
             dao.update(updated)
-            dao.upsertFts(ItemFts(item.id, updated.title, updated.summary, updated.content))
+            dao.upsertFts(Indexer.ftsRow(updated))
+        }
+    }
+
+    // Edition de la fiche : titre, categorie (figee), tags, echeance, date du document
+    fun updateMeta(
+        item: ItemEntity,
+        title: String,
+        categoryId: String,
+        tags: String,
+        dueStr: String,
+        docStr: String
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val due = parseDate(dueStr)
+            val updated = item.copy(
+                title = title.ifBlank { item.title },
+                category = categoryId,
+                catManual = true,
+                tags = tags.split(',').map { it.trim() }.filter { it.isNotBlank() }
+                    .joinToString(","),
+                dueDate = due,
+                dueNotified = if (due != item.dueDate) false else item.dueNotified,
+                docDate = parseDate(docStr)
+            )
+            dao.update(updated)
+            dao.upsertFts(Indexer.ftsRow(updated))
+        }
+    }
+
+    private fun parseDate(s: String): Long? {
+        if (s.isBlank()) return null
+        return runCatching {
+            java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.FRANCE)
+                .apply { isLenient = false }.parse(s.trim())?.time
+        }.getOrNull()
+    }
+
+    // Partage sortant : copie dechiffree temporaire dans le cache, servie par FileProvider
+    fun buildShareIntent(item: ItemEntity): android.content.Intent {
+        val app = getApplication<Application>()
+        return if (item.filePath == null) {
+            android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(android.content.Intent.EXTRA_SUBJECT, item.title)
+                putExtra(android.content.Intent.EXTRA_TEXT, item.content)
+            }
+        } else {
+            val shareDir = File(app.cacheDir, "share").apply { mkdirs() }
+            val safe = item.title.replace(Regex("[^\\p{L}\\p{N} _-]"), "_").take(60)
+            val out = File(shareDir, safe + item.format)
+            EncFile.decryptStream(app, File(item.filePath)).use { ins ->
+                out.outputStream().use { ins.copyTo(it) }
+            }
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                app, app.packageName + ".fileprovider", out
+            )
+            android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = when (item.format) {
+                    ".jpg", ".jpeg" -> "image/jpeg"
+                    ".png" -> "image/png"
+                    ".webp" -> "image/webp"
+                    ".pdf" -> "application/pdf"
+                    ".txt", ".md" -> "text/plain"
+                    else -> "application/octet-stream"
+                }
+                putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
         }
     }
 

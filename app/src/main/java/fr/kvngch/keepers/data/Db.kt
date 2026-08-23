@@ -42,8 +42,19 @@ data class ItemEntity(
     @ColumnInfo(defaultValue = "") val status: String = "",
     val embedding: ByteArray? = null,
     // id de categorie detectee (Category.id), vide = pas encore classe
-    @ColumnInfo(defaultValue = "") val category: String = ""
-)
+    @ColumnInfo(defaultValue = "") val category: String = "",
+    // categorie fixee a la main : l'indexation ne l'ecrase plus
+    @ColumnInfo(defaultValue = "0") val catManual: Boolean = false,
+    // tags libres separes par des virgules
+    @ColumnInfo(defaultValue = "") val tags: String = "",
+    // date du document detectee dans le texte (differente de la date d'ajout)
+    val docDate: Long? = null
+) {
+    fun refDate(): Long = docDate ?: addedAt
+
+    fun tagList(): List<String> =
+        tags.split(',').map { it.trim() }.filter { it.isNotBlank() }
+}
 
 @Fts4(tokenizer = FtsOptions.TOKENIZER_UNICODE61)
 @Entity(tableName = "items_fts")
@@ -160,7 +171,15 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
-@Database(entities = [ItemEntity::class, ItemFts::class], version = 4, exportSchema = true)
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE items ADD COLUMN catManual INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE items ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE items ADD COLUMN docDate INTEGER")
+    }
+}
+
+@Database(entities = [ItemEntity::class, ItemFts::class], version = 5, exportSchema = true)
 abstract class AppDb : RoomDatabase() {
 
     abstract fun itemDao(): ItemDao
@@ -169,17 +188,41 @@ abstract class AppDb : RoomDatabase() {
         @Volatile
         private var instance: AppDb? = null
 
-        fun get(context: Context): AppDb =
-            instance ?: synchronized(this) {
-                instance ?: run {
-                    System.loadLibrary("sqlcipher")
-                    val app = context.applicationContext
-                    val passphrase = DbKey.passphrase(app, app.getDatabasePath("keepers.db"))
-                    Room.databaseBuilder(app, AppDb::class.java, "keepers.db")
-                        .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
-                        .build().also { instance = it }
-                }
+        @Volatile
+        private var instanceVault: String? = null
+
+        // le coffre "perso" garde les noms historiques pour la retrocompatibilite
+        fun dbName(vault: String): String =
+            if (vault == "perso") "keepers.db" else "keepers-$vault.db"
+
+        fun docsDirName(vault: String): String =
+            if (vault == "perso") "docs" else "docs-$vault"
+
+        fun get(context: Context): AppDb {
+            val vault = fr.kvngch.keepers.Prefs.vault(context)
+            instance?.let { if (instanceVault == vault) return it }
+            synchronized(this) {
+                instance?.let { if (instanceVault == vault) return it }
+                instance?.close()
+                System.loadLibrary("sqlcipher")
+                val app = context.applicationContext
+                val passphrase = DbKey.passphrase(app, vault)
+                return Room.databaseBuilder(app, AppDb::class.java, dbName(vault))
+                    .openHelperFactory(SupportOpenHelperFactory(passphrase))
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .build().also {
+                        instance = it
+                        instanceVault = vault
+                    }
             }
+        }
+
+        fun reset() {
+            synchronized(this) {
+                instance?.close()
+                instance = null
+                instanceVault = null
+            }
+        }
     }
 }

@@ -31,10 +31,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import fr.kvngch.keepers.BackupWorker
 import fr.kvngch.keepers.Prefs
+import fr.kvngch.keepers.data.DbKey
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsDialog(onDismiss: () -> Unit) {
@@ -46,6 +50,10 @@ fun SettingsDialog(onDismiss: () -> Unit) {
     var autoBackup by remember { mutableStateOf(Prefs.autoBackup(context)) }
     var backupTree by remember { mutableStateOf(Prefs.backupTree(context)) }
     var askBackupPw by remember { mutableStateOf(false) }
+    var dueLead by remember { mutableIntStateOf(Prefs.dueLeadDays(context)) }
+    var dynamicColor by remember { mutableStateOf(Prefs.dynamicColor(context)) }
+    var strongKey by remember { mutableStateOf(Prefs.strongKey(context)) }
+    val scope = rememberCoroutineScope()
 
     val treePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -117,6 +125,15 @@ fun SettingsDialog(onDismiss: () -> Unit) {
                         }
                         Prefs.setPdfMaxPages(context, pdfPages)
                     }
+                    SettingRow("Notification avant échéance", "$dueLead jours") {
+                        dueLead = when (dueLead) {
+                            1 -> 3
+                            3 -> 7
+                            7 -> 14
+                            else -> 1
+                        }
+                        Prefs.setDueLeadDays(context, dueLead)
+                    }
                     SwitchRow(
                         "Scanner de documents",
                         "Recadrage automatique via Play services, sinon appareil photo",
@@ -124,6 +141,28 @@ fun SettingsDialog(onDismiss: () -> Unit) {
                     ) {
                         scanner = it
                         Prefs.setUseScanner(context, it)
+                    }
+                    SwitchRow(
+                        "Couleurs dynamiques (Material You)",
+                        "Palette du fond d'écran, prend effet au prochain démarrage (Android 12+)",
+                        dynamicColor
+                    ) {
+                        dynamicColor = it
+                        Prefs.setDynamicColor(context, it)
+                    }
+                    SwitchRow(
+                        "Clé liée à l'authentification",
+                        "Le déchiffrement exige un déverrouillage de l'appareil de moins de 24 h. Peut retarder les traitements en arrière-plan.",
+                        strongKey
+                    ) { enabled ->
+                        strongKey = enabled
+                        scope.launch(Dispatchers.IO) {
+                            runCatching { DbKey.setAuthRequired(context, enabled) }
+                                .onFailure {
+                                    strongKey = !enabled
+                                    Prefs.setStrongKey(context, !enabled)
+                                }
+                        }
                     }
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     Text(

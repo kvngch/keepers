@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Image as ImageIcon
 import androidx.compose.material.icons.filled.InsertDriveFile
@@ -58,7 +59,9 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -66,6 +69,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -77,8 +82,11 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
@@ -107,6 +115,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -130,8 +139,10 @@ import fr.kvngch.keepers.MainViewModel
 import fr.kvngch.keepers.Prefs
 import fr.kvngch.keepers.Sort
 import fr.kvngch.keepers.TypeFilter
+import fr.kvngch.keepers.data.AppDb
 import fr.kvngch.keepers.data.EncFile
 import fr.kvngch.keepers.data.ItemEntity
+import android.content.Intent
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -188,9 +199,11 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
 
     var showNoteDialog by remember { mutableStateOf(false) }
     var editItem by remember { mutableStateOf<ItemEntity?>(null) }
-    var detailItem by remember { mutableStateOf<ItemEntity?>(null) }
+    var metaItem by remember { mutableStateOf<ItemEntity?>(null) }
     var viewerItem by remember { mutableStateOf<ItemEntity?>(null) }
     var trashItem by remember { mutableStateOf<ItemEntity?>(null) }
+    var showVaults by remember { mutableStateOf(false) }
+    val wide = LocalConfiguration.current.screenWidthDp >= 840
     var pendingCapture by remember { mutableStateOf<File?>(null) }
     var exportAsk by remember { mutableStateOf(false) }
     var restoreAskUri by remember { mutableStateOf<android.net.Uri?>(null) }
@@ -291,6 +304,14 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
     }
 
     val closeDrawer: () -> Unit = { scope.launch { drawerState.close() } }
+    val shareItem: (ItemEntity) -> Unit = { item ->
+        scope.launch {
+            val intent = withContext(Dispatchers.IO) {
+                runCatching { vm.buildShareIntent(item) }.getOrNull()
+            }
+            intent?.let { context.startActivity(Intent.createChooser(it, "Partager")) }
+        }
+    }
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -307,13 +328,24 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                         modifier = Modifier.padding(horizontal = 28.dp)
                     )
                     Text(
-                        "Coffre local chiffré",
+                        "Coffre « ${Prefs.vault(context)} » · ${counts.total} docs · " +
+                            Formats.size(counts.bytes),
                         style = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = FontFamily.Monospace
                         ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 28.dp, vertical = 4.dp)
                     )
+                    counts.nextDue?.let {
+                        Text(
+                            "Prochaine échéance : ${Formats.date(it)}",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            color = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.padding(horizontal = 28.dp)
+                        )
+                    }
                     NavigationDrawerItem(
                         label = { Text("Tous les documents") },
                         selected = !f.trash && !f.due && f.category == null,
@@ -361,6 +393,32 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                                 )
                             )
                         }
+                    }
+                    if (counts.byTag.isNotEmpty()) {
+                        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                        Text(
+                            "TAGS",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 28.dp, vertical = 4.dp)
+                        )
+                        counts.byTag.entries.sortedByDescending { it.value }.take(12)
+                            .forEach { (tag, n) ->
+                                NavigationDrawerItem(
+                                    label = { Text("#$tag") },
+                                    selected = f.tag == tag,
+                                    onClick = {
+                                        vm.setTag(tag)
+                                        closeDrawer()
+                                    },
+                                    badge = { Text("$n") },
+                                    modifier = Modifier.padding(
+                                        NavigationDrawerItemDefaults.ItemPadding
+                                    )
+                                )
+                            }
                     }
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     NavigationDrawerItem(
@@ -417,6 +475,16 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                     )
                     NavigationDrawerItem(
+                        label = { Text("Changer de coffre") },
+                        selected = false,
+                        onClick = {
+                            showVaults = true
+                            closeDrawer()
+                        },
+                        icon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                    NavigationDrawerItem(
                         label = { Text("À propos") },
                         selected = false,
                         onClick = {
@@ -442,10 +510,15 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
             )
         }
     ) { padding ->
-        Column(
+        Row(
             Modifier
                 .fillMaxSize()
                 .padding(padding)
+        ) {
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxSize()
         ) {
             if (selected.isNotEmpty()) {
                 Row(
@@ -547,6 +620,22 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                         )
                     }
                 }
+                f.tag?.let { t ->
+                    item {
+                        FilterChip(
+                            selected = true,
+                            onClick = { vm.setTag(null) },
+                            label = { Text("#$t") },
+                            trailingIcon = {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Retirer le filtre de tag",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        )
+                    }
+                }
                 items(TypeFilter.entries) { t ->
                     FilterChip(
                         selected = f.type == t,
@@ -630,10 +719,10 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                                     if (selected.isNotEmpty()) {
                                         selected = if (item.id in selected) selected - item.id
                                         else selected + item.id
-                                    } else when {
-                                        f.trash -> trashItem = item
-                                        item.filePath == null -> detailItem = item
-                                        else -> viewerItem = item
+                                    } else if (f.trash) {
+                                        trashItem = item
+                                    } else {
+                                        viewerItem = item
                                     }
                                 },
                                 onLongClick = {
@@ -645,6 +734,48 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                     }
                 }
             }
+        }
+        if (wide) {
+            VerticalDivider()
+            Box(Modifier.weight(1.2f)) {
+                val sel = viewerItem
+                if (sel == null) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Shield,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Text(
+                            "Sélectionnez un document",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    DocumentPane(
+                        item = sel,
+                        onEditMeta = { metaItem = sel },
+                        onEditNote = if (sel.filePath == null) {
+                            { editItem = sel }
+                        } else null,
+                        onShare = { shareItem(sel) },
+                        onDelete = {
+                            vm.moveToTrash(sel)
+                            viewerItem = null
+                        },
+                        onClose = { viewerItem = null }
+                    )
+                }
+            }
+        }
         }
     }
     }
@@ -671,28 +802,53 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
         )
     }
 
-    detailItem?.let { item ->
-        DetailDialog(
+    if (!wide) {
+        viewerItem?.let { item ->
+            ViewerDialog(
+                item = item,
+                onDismiss = { viewerItem = null },
+                onEditMeta = { metaItem = item },
+                onEditNote = if (item.filePath == null) {
+                    { editItem = item }
+                } else null,
+                onShare = { shareItem(item) },
+                onDelete = {
+                    vm.moveToTrash(item)
+                    viewerItem = null
+                }
+            )
+        }
+    }
+
+    metaItem?.let { item ->
+        EditMetaDialog(
             item = item,
-            onDismiss = { detailItem = null },
-            onDelete = {
-                vm.moveToTrash(item)
-                detailItem = null
-            },
-            onEdit = {
-                detailItem = null
-                editItem = item
+            onDismiss = { metaItem = null },
+            onSave = { title, cat, tags, due, doc ->
+                vm.updateMeta(item, title, cat, tags, due, doc)
+                metaItem = null
             }
         )
     }
 
-    viewerItem?.let { item ->
-        ViewerDialog(
-            item = item,
-            onDismiss = { viewerItem = null },
-            onDelete = {
-                vm.moveToTrash(item)
-                viewerItem = null
+    if (showVaults) {
+        VaultDialog(
+            current = Prefs.vault(context),
+            vaults = Prefs.vaults(context),
+            onDismiss = { showVaults = false },
+            onSwitch = { v ->
+                Prefs.setVault(context, v)
+                AppDb.reset()
+                (context as Activity).recreate()
+            },
+            onCreate = { name ->
+                val id = name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
+                if (id.isNotBlank() && id !in Prefs.vaults(context)) {
+                    Prefs.addVault(context, id)
+                    Prefs.setVault(context, id)
+                    AppDb.reset()
+                    (context as Activity).recreate()
+                }
             }
         )
     }
@@ -1456,48 +1612,138 @@ internal fun PasswordDialog(
     )
 }
 
+// Fiche du document : titre, categorie, tags, echeance et date du document
 @Composable
-private fun DetailDialog(
+private fun EditMetaDialog(
     item: ItemEntity,
     onDismiss: () -> Unit,
-    onDelete: () -> Unit,
-    onEdit: () -> Unit
+    onSave: (String, String, String, String, String) -> Unit
 ) {
+    var title by remember { mutableStateOf(item.title) }
+    var tags by remember { mutableStateOf(item.tags.replace(",", ", ")) }
+    var cat by remember { mutableStateOf(item.category.ifBlank { Category.AUTRE.id }) }
+    var due by remember { mutableStateOf(item.dueDate?.let(Formats::date) ?: "") }
+    var doc by remember { mutableStateOf(item.docDate?.let(Formats::date) ?: "") }
+    var catMenu by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        },
+        title = { Text("Fiche du document") },
         text = {
             Column(
-                Modifier
-                    .heightIn(max = 360.dp)
-                    .verticalScroll(rememberScrollState()),
+                Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    "Ajouté le ${Formats.dateTime(item.addedAt)}  ${item.format}  ${Formats.size(item.sizeBytes)}",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Titre") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
                 )
-                Text(
-                    item.content.ifBlank { item.summary },
-                    style = MaterialTheme.typography.bodyMedium
+                Box {
+                    OutlinedButton(onClick = { catMenu = true }) {
+                        Text("Catégorie : ${Category.byId(cat).label}")
+                    }
+                    DropdownMenu(expanded = catMenu, onDismissRequest = { catMenu = false }) {
+                        Category.entries.forEach { c ->
+                            DropdownMenuItem(
+                                text = { Text(c.label) },
+                                onClick = {
+                                    cat = c.id
+                                    catMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = tags,
+                    onValueChange = { tags = it },
+                    label = { Text("Tags (séparés par des virgules)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = due,
+                    onValueChange = { due = it },
+                    label = { Text("Échéance (JJ/MM/AAAA, vide = aucune)") },
+                    supportingText = { Text("Notification avant l'échéance, délai dans les réglages") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = doc,
+                    onValueChange = { doc = it },
+                    label = { Text("Date du document (JJ/MM/AAAA)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Fermer") }
+            TextButton(onClick = { onSave(title.trim(), cat, tags, due, doc) }) {
+                Text("Enregistrer")
+            }
         },
         dismissButton = {
-            Row {
-                TextButton(onClick = onDelete) {
-                    Text("Supprimer", color = MaterialTheme.colorScheme.error)
+            TextButton(onClick = onDismiss) { Text("Annuler") }
+        }
+    )
+}
+
+@Composable
+private fun VaultDialog(
+    current: String,
+    vaults: List<String>,
+    onDismiss: () -> Unit,
+    onSwitch: (String) -> Unit,
+    onCreate: (String) -> Unit
+) {
+    var newName by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Coffres") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                vaults.forEach { v ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp)),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = v == current,
+                            onClick = { if (v != current) onSwitch(v) }
+                        )
+                        Text(v, style = MaterialTheme.typography.bodyLarge)
+                    }
                 }
-                TextButton(onClick = onEdit) { Text("Modifier") }
+                Text(
+                    "Chaque coffre a sa propre base, ses fichiers et sa clé de chiffrement.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("Nouveau coffre") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = { onCreate(newName) },
+                        enabled = newName.isNotBlank()
+                    ) { Text("Créer") }
+                }
             }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Fermer") }
         }
     )
 }
@@ -1506,6 +1752,9 @@ private fun DetailDialog(
 private fun ViewerDialog(
     item: ItemEntity,
     onDismiss: () -> Unit,
+    onEditMeta: () -> Unit,
+    onEditNote: (() -> Unit)?,
+    onShare: () -> Unit,
     onDelete: () -> Unit
 ) {
     Dialog(
@@ -1513,47 +1762,105 @@ private fun ViewerDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize()) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Fermer")
-                    }
-                    Text(
-                        item.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = onDelete) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Mettre à la corbeille",
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    }
+            DocumentPane(
+                item = item,
+                onEditMeta = onEditMeta,
+                onEditNote = onEditNote,
+                onShare = onShare,
+                onDelete = onDelete,
+                onClose = onDismiss
+            )
+        }
+    }
+}
+
+// Fiche et contenu d'un document, utilisee en plein ecran (telephone)
+// ou dans le volet droit (tablette / paysage large)
+@Composable
+private fun DocumentPane(
+    item: ItemEntity,
+    onEditMeta: () -> Unit,
+    onEditNote: (() -> Unit)?,
+    onShare: () -> Unit,
+    onDelete: () -> Unit,
+    onClose: (() -> Unit)?
+) {
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (onClose != null) {
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Default.Close, contentDescription = "Fermer")
                 }
-                Box(Modifier.weight(1f)) {
-                    when {
-                        Indexer.isImage(item.format) -> ZoomableImage(item)
-                        item.format == ".pdf" -> PdfPages(item)
-                        else -> Column(
-                            Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .padding(16.dp)
-                        ) {
-                            Text(
-                                item.content.ifBlank { item.summary },
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
+            }
+            Text(
+                item.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = if (onClose == null) 12.dp else 0.dp)
+            )
+            if (onEditNote != null) {
+                IconButton(onClick = onEditNote) {
+                    Icon(Icons.Default.EditNote, contentDescription = "Modifier la note")
+                }
+            }
+            IconButton(onClick = onEditMeta) {
+                Icon(Icons.Default.Edit, contentDescription = "Modifier la fiche")
+            }
+            IconButton(onClick = onShare) {
+                Icon(Icons.Default.Share, contentDescription = "Partager")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Mettre à la corbeille",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+        val metaParts = mutableListOf(
+            "Ajouté le ${Formats.date(item.addedAt)}",
+            item.format,
+            Formats.size(item.sizeBytes)
+        )
+        item.docDate?.let { metaParts.add("document du ${Formats.date(it)}") }
+        item.dueDate?.let { metaParts.add("échéance ${Formats.date(it)}") }
+        if (item.tags.isNotBlank()) {
+            metaParts.add(item.tagList().joinToString(" ") { "#$it" })
+        }
+        Text(
+            metaParts.joinToString("  "),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = FontFamily.Monospace
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
+        Box(
+            Modifier
+                .weight(1f)
+                .padding(top = 8.dp)
+        ) {
+            when {
+                Indexer.isImage(item.format) -> ZoomableImage(item)
+                item.format == ".pdf" -> PdfPages(item)
+                else -> Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        item.content.ifBlank { item.summary },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         }
