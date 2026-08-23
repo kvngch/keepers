@@ -22,7 +22,10 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         if (item.indexed) return Result.success()
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         try {
-            Indexer.index(applicationContext, dao, item, recognizer)
+            Indexer.index(
+                applicationContext, dao, item, recognizer,
+                maxPdfPages = Prefs.pdfMaxPages(applicationContext)
+            )
         } finally {
             recognizer.close()
         }

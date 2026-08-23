@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 
 package fr.kvngch.keepers.ui
 
@@ -12,7 +12,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -109,6 +112,7 @@ import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import fr.kvngch.keepers.Formats
 import fr.kvngch.keepers.Indexer
 import fr.kvngch.keepers.MainViewModel
+import fr.kvngch.keepers.Prefs
 import fr.kvngch.keepers.Sort
 import fr.kvngch.keepers.TypeFilter
 import fr.kvngch.keepers.data.EncFile
@@ -172,6 +176,11 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
     var exportAsk by remember { mutableStateOf(false) }
     var restoreAskUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var pendingExportPw by remember { mutableStateOf<String?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(setOf<Long>()) }
+    var confirmBatchDelete by remember { mutableStateOf(false) }
+
+    LaunchedEffect(f.trash) { selected = emptySet() }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -264,7 +273,9 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
             IngestFab(
                 onNote = { showNoteDialog = true },
                 onImport = { importLauncher.launch(arrayOf("*/*")) },
-                onCapture = { startScan() }
+                onCapture = {
+                    if (Prefs.useScanner(context)) startScan() else fallbackCamera()
+                }
             )
         }
     ) { padding ->
@@ -273,36 +284,89 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(start = 20.dp, end = 8.dp, top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Keepers",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f)
-                )
-                var menuOpen by remember { mutableStateOf(false) }
-                IconButton(onClick = { menuOpen = true }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+            if (selected.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 8.dp, end = 8.dp, top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { selected = emptySet() }) {
+                        Icon(Icons.Default.Close, contentDescription = "Annuler la sélection")
+                    }
+                    Text(
+                        "${selected.size} sélectionné(s)",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (f.trash) {
+                        IconButton(onClick = {
+                            vm.restoreFromTrash(selected)
+                            selected = emptySet()
+                        }) {
+                            Icon(
+                                Icons.Default.RestoreFromTrash,
+                                contentDescription = "Restaurer la sélection"
+                            )
+                        }
+                        IconButton(onClick = { confirmBatchDelete = true }) {
+                            Icon(
+                                Icons.Default.DeleteForever,
+                                contentDescription = "Supprimer définitivement la sélection",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    } else {
+                        IconButton(onClick = {
+                            vm.moveToTrash(selected)
+                            selected = emptySet()
+                        }) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Mettre la sélection à la corbeille"
+                            )
+                        }
+                    }
                 }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Exporter le coffre") },
-                        onClick = {
-                            menuOpen = false
-                            exportAsk = true
-                        }
+            } else {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 8.dp, top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Keepers",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f)
                     )
-                    DropdownMenuItem(
-                        text = { Text("Restaurer une sauvegarde") },
-                        onClick = {
-                            menuOpen = false
-                            restorePicker.launch(arrayOf("*/*"))
-                        }
-                    )
+                    var menuOpen by remember { mutableStateOf(false) }
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Réglages") },
+                            onClick = {
+                                menuOpen = false
+                                showSettings = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Exporter le coffre") },
+                            onClick = {
+                                menuOpen = false
+                                exportAsk = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Restaurer une sauvegarde") },
+                            onClick = {
+                                menuOpen = false
+                                restorePicker.launch(arrayOf("*/*"))
+                            }
+                        )
+                    }
                 }
             }
 
@@ -382,13 +446,24 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                             }
                         }
                         items(list, key = { it.id }) { item ->
-                            ItemCard(item, onClick = {
-                                when {
-                                    f.trash -> trashItem = item
-                                    item.filePath == null -> detailItem = item
-                                    else -> viewerItem = item
+                            ItemCard(
+                                item,
+                                isSelected = item.id in selected,
+                                onClick = {
+                                    if (selected.isNotEmpty()) {
+                                        selected = if (item.id in selected) selected - item.id
+                                        else selected + item.id
+                                    } else when {
+                                        f.trash -> trashItem = item
+                                        item.filePath == null -> detailItem = item
+                                        else -> viewerItem = item
+                                    }
+                                },
+                                onLongClick = {
+                                    selected = if (item.id in selected) selected - item.id
+                                    else selected + item.id
                                 }
-                            })
+                            )
                         }
                     }
                 }
@@ -501,6 +576,28 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
             }
         )
     }
+
+    if (showSettings) {
+        SettingsDialog(onDismiss = { showSettings = false })
+    }
+
+    if (confirmBatchDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmBatchDelete = false },
+            title = { Text("Supprimer définitivement ?") },
+            text = { Text("${selected.size} élément(s) seront supprimés sans possibilité de récupération.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteForever(selected)
+                    selected = emptySet()
+                    confirmBatchDelete = false
+                }) { Text("Supprimer", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmBatchDelete = false }) { Text("Annuler") }
+            }
+        )
+    }
 }
 
 @Composable
@@ -602,14 +699,25 @@ private fun ProcessingBanner(message: String) {
 }
 
 @Composable
-private fun ItemCard(item: ItemEntity, onClick: () -> Unit) {
+private fun ItemCard(
+    item: ItemEntity,
+    isSelected: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {}
+) {
     Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer
+            containerColor = if (isSelected) MaterialTheme.colorScheme.secondaryContainer
+            else MaterialTheme.colorScheme.surfaceContainer
         ),
+        border = if (isSelected) {
+            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        } else null,
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
@@ -911,7 +1019,7 @@ private fun NoteDialog(
 }
 
 @Composable
-private fun PasswordDialog(
+internal fun PasswordDialog(
     title: String,
     hint: String,
     onDismiss: () -> Unit,

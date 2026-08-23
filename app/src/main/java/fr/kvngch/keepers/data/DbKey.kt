@@ -65,6 +65,11 @@ object DbKey {
         check(tmp.renameTo(dbFile)) { "bascule vers la base chiffree impossible" }
     }
 
+    // Protection generique d'une petite valeur (ex : mot de passe de sauvegarde auto)
+    fun protect(value: String): String = encrypt(value.toByteArray())
+
+    fun reveal(stored: String): String = String(decrypt(stored))
+
     private fun keystoreKey(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey(ALIAS, null) as? SecretKey)?.let { return it }

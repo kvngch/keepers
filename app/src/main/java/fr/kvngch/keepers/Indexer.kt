@@ -32,7 +32,13 @@ object Indexer {
 
     data class Analysis(val summary: String, val extracted: String, val dueDate: Long?)
 
-    suspend fun index(context: Context, dao: ItemDao, item: ItemEntity, recognizer: TextRecognizer) {
+    suspend fun index(
+        context: Context,
+        dao: ItemDao,
+        item: ItemEntity,
+        recognizer: TextRecognizer,
+        maxPdfPages: Int = 10
+    ) {
         val src = item.filePath?.let { File(it) } ?: return
         if (!src.exists()) return
         val plain = EncFile.decryptToCache(context, src)
@@ -40,7 +46,7 @@ object Indexer {
             val content = when {
                 item.format in TEXT_EXT ->
                     runCatching { plain.readText().take(100_000) }.getOrDefault("")
-                item.format == ".pdf" -> pdfText(plain, recognizer)
+                item.format == ".pdf" -> pdfText(plain, recognizer, maxPdfPages)
                 isImage(item.format) -> ocrFile(context, plain, recognizer)
                 else -> ""
             }
@@ -146,14 +152,12 @@ object Indexer {
                 .addOnFailureListener { cont.resume("") }
         }
 
-    private suspend fun pdfText(file: File, recognizer: TextRecognizer): String {
+    private suspend fun pdfText(file: File, recognizer: TextRecognizer, maxPages: Int): String {
         val sb = StringBuilder()
         runCatching {
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
                 PdfRenderer(pfd).use { renderer ->
-                    // ponytail: cap a 10 pages pour borner temps et memoire; a relever
-                    // si des documents longs doivent etre indexes en entier
-                    val pages = minOf(renderer.pageCount, 10)
+                    val pages = minOf(renderer.pageCount, maxPages)
                     for (i in 0 until pages) {
                         val page = renderer.openPage(i)
                         try {

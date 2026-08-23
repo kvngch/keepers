@@ -29,8 +29,11 @@ Pour recevoir les mises à jour automatiquement, ajouter le dépôt dans
   une notification locale 7 jours avant
 - Visionneuse interne (images zoomables, PDF, texte), miniatures sur les cartes,
   édition des notes
-- Corbeille avec purge automatique après 30 jours
-- Sauvegarde portable chiffrée par mot de passe (export et restauration)
+- Corbeille avec purge automatique (délai configurable), sélection multiple par appui long
+- Sauvegarde portable chiffrée par mot de passe (export et restauration), et sauvegarde
+  automatique hebdomadaire vers un dossier choisi (4 dernières conservées)
+- Écran de réglages : délai de verrouillage, rétention de la corbeille, pages PDF
+  indexées, scanner de documents
 - Widget de capture et raccourcis d'icône (appui long)
 - Thème Material 3 complet en mode clair et sombre (fonds mats pensés pour OLED),
   accents vert minéral, métadonnées en police monospace
@@ -55,5 +58,12 @@ Pour recevoir les mises à jour automatiquement, ajouter le dépôt dans
 ./gradlew assembleDebug
 ```
 
-JDK 17 et le SDK Android 35 sont requis. Chaque push sur `main` est compilé par la CI, et
-la release signée est produite par le workflow GitHub Actions au push d'un tag `v*`.
+JDK 17 et le SDK Android 35 sont requis. Chaque push sur `main` passe les tests unitaires,
+la compilation debug et les tests instrumentés sur émulateur (migration de base, export et
+restauration chiffrés). La release signée est produite par le workflow GitHub Actions au
+push d'un tag `v*`.
+
+```bash
+./gradlew test                        # tests unitaires
+./gradlew connectedDebugAndroidTest   # tests instrumentés (appareil ou émulateur requis)
+```

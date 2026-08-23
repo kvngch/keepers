@@ -78,8 +78,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            // corbeille : purge definitive apres 30 jours
-            dao.purgeable(System.currentTimeMillis() - 30L * 86_400_000)
+            // corbeille : purge definitive apres le delai configure
+            val days = Prefs.trashDays(getApplication()).toLong()
+            dao.purgeable(System.currentTimeMillis() - days * 86_400_000)
                 .forEach { deleteForeverInternal(it) }
             // migration < 2.0.0 : chiffre les fichiers stockes en clair
             dao.unencryptedFiles().forEach { item ->
@@ -285,18 +286,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         IndexWorker.enqueue(getApplication(), id)
     }
 
-    fun moveToTrash(item: ItemEntity) {
+    fun moveToTrash(item: ItemEntity) = moveToTrash(listOf(item.id))
+
+    fun moveToTrash(ids: Collection<Long>) {
         viewModelScope.launch(Dispatchers.IO) {
-            dao.moveToTrash(item.id, System.currentTimeMillis())
+            val t = System.currentTimeMillis()
+            ids.forEach { dao.moveToTrash(it, t) }
         }
     }
 
-    fun restoreFromTrash(item: ItemEntity) {
-        viewModelScope.launch(Dispatchers.IO) { dao.restoreFromTrash(item.id) }
+    fun restoreFromTrash(item: ItemEntity) = restoreFromTrash(listOf(item.id))
+
+    fun restoreFromTrash(ids: Collection<Long>) {
+        viewModelScope.launch(Dispatchers.IO) { ids.forEach { dao.restoreFromTrash(it) } }
     }
 
-    fun deleteForever(item: ItemEntity) {
-        viewModelScope.launch(Dispatchers.IO) { deleteForeverInternal(item) }
+    fun deleteForever(item: ItemEntity) = deleteForever(listOf(item.id))
+
+    fun deleteForever(ids: Collection<Long>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            ids.forEach { id -> dao.byId(id)?.let { deleteForeverInternal(it) } }
+        }
     }
 
     private suspend fun deleteForeverInternal(item: ItemEntity) {

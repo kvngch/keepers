@@ -55,9 +55,10 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Grace d'une minute : les allers-retours internes (camera, selecteur de
+        // Grace configurable : les allers-retours internes (camera, selecteur de
         // fichiers, biometrie) ne reverrouillent pas le coffre
-        if (locked.value || SystemClock.elapsedRealtime() - stoppedAt > 60_000) {
+        val grace = Prefs.lockGraceSeconds(this) * 1_000L
+        if (locked.value || SystemClock.elapsedRealtime() - stoppedAt > grace) {
             locked.value = true
             authenticate()
         }

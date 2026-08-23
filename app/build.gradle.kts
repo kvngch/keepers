@@ -13,12 +13,9 @@ android {
         applicationId = "fr.kvngch.keepers"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "2.0.0"
-        ndk {
-            // APK distribue en sideload : arm64 couvre tous les telephones recents
-            abiFilters += "arm64-v8a"
-        }
+        versionCode = 7
+        versionName = "2.1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -35,6 +32,11 @@ android {
 
     buildTypes {
         release {
+            ndk {
+                // APK distribue en sideload : arm64 couvre tous les telephones recents.
+                // Le debug garde toutes les ABI pour l'emulateur x86_64 de la CI.
+                abiFilters += "arm64-v8a"
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -85,4 +87,8 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.5")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
+
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
