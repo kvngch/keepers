@@ -10,7 +10,8 @@ n'embarque aucun SDK tiers de mesure.
 Télécharger le dernier APK depuis la page
 [Releases](https://github.com/kvngch/keepers/releases), puis l'installer sur un appareil
 Android 8.0 ou plus récent (arm64, l'installation de sources inconnues doit être autorisée).
-Chaque release inclut l'empreinte SHA-256 de l'APK.
+Chaque release inclut l'empreinte SHA-256 de l'APK. L'APK est volumineux (~120 Mo) car il
+embarque le modèle de recherche sémantique : c'est le prix du 100 % local.
 
 Pour recevoir les mises à jour automatiquement, ajouter le dépôt dans
 [Obtainium](https://github.com/ImranR98/Obtainium) avec l'URL `https://github.com/kvngch/keepers`.
@@ -19,6 +20,12 @@ Pour recevoir les mises à jour automatiquement, ajouter le dépôt dans
 
 - Recherche plein texte instantanée (index FTS local, insensible aux accents) sur les
   titres, résumés et contenus
+- Recherche sémantique locale en complément : les documents proches par le sens de la
+  requête apparaissent même sans mot-clé commun (badge "≈ sens"), grâce à un modèle
+  d'embedding embarqué dans l'APK (Universal Sentence Encoder, MediaPipe)
+- File de traitement visible : la bannière indique l'étape en cours (OCR, analyse,
+  vectorisation) et ouvre la liste des documents en attente avec leur ancienneté;
+  les indexations en erreur sont relançables d'un geste
 - Filtres par type (notes, images, PDF), par période, tri, regroupement par mois
 - Scanner de documents (recadrage automatique, multi-pages) avec repli sur l'appareil
   photo, import multiple de fichiers, note rapide, partage vers Keepers depuis

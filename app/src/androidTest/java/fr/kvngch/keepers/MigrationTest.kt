@@ -5,6 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import fr.kvngch.keepers.data.AppDb
 import fr.kvngch.keepers.data.MIGRATION_1_2
+import fr.kvngch.keepers.data.MIGRATION_2_3
 import java.io.File
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -54,7 +55,7 @@ class MigrationTest {
 
         val db = Room.databaseBuilder(context, AppDb::class.java, name)
             .openHelperFactory(SupportOpenHelperFactory(passphrase))
-            .addMigrations(MIGRATION_1_2)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .build()
         try {
             runBlocking {

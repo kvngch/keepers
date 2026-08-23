@@ -41,6 +41,15 @@ object Indexer {
     ) {
         val src = item.filePath?.let { File(it) } ?: return
         if (!src.exists()) return
+        dao.setStatus(
+            item.id,
+            when {
+                item.format == ".pdf" -> "OCR des pages du PDF..."
+                isImage(item.format) -> "OCR de l'image..."
+                item.format in TEXT_EXT -> "Lecture du texte..."
+                else -> "Indexation des métadonnées..."
+            }
+        )
         val plain = EncFile.decryptToCache(context, src)
         try {
             val content = when {
@@ -50,6 +59,7 @@ object Indexer {
                 isImage(item.format) -> ocrFile(context, plain, recognizer)
                 else -> ""
             }
+            dao.setStatus(item.id, "Analyse : dates, montants, résumé...")
             val a = analyze(content)
             val summary = when {
                 content.isNotBlank() -> a.summary
@@ -57,12 +67,17 @@ object Indexer {
                     "Document stocké localement, aucun texte détecté par l'OCR."
                 else -> "Fichier stocké localement. Métadonnées indexées, contenu non extrait."
             }
+            val thumb = thumbnail(plain, item.format)
+            dao.setStatus(item.id, "Vectorisation sémantique...")
+            val embedding = Embedder.embed(context, item.title + " " + content.take(1_000))
             val updated = item.copy(
                 content = content,
                 summary = summary,
                 extracted = a.extracted,
                 dueDate = a.dueDate,
-                thumb = thumbnail(plain, item.format),
+                thumb = thumb,
+                embedding = embedding?.let(Embedder::toBytes),
+                status = "",
                 indexed = true
             )
             dao.update(updated)
@@ -71,6 +86,9 @@ object Indexer {
             plain.delete()
         }
     }
+
+    fun embeddingText(item: ItemEntity): String =
+        item.title + " " + item.content.take(1_000)
 
     // Resume extractif local : les deux phrases les plus denses en mots frequents.
     // ponytail: heuristique simple; Gemini Nano (AICore) si un appareil compatible arrive.

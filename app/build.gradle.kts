@@ -13,8 +13,8 @@ android {
         applicationId = "fr.kvngch.keepers"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "2.1.0"
+        versionCode = 8
+        versionName = "2.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -61,7 +61,30 @@ android {
     buildFeatures {
         compose = true
     }
+
+    androidResources {
+        // le modele tflite doit rester non compresse pour etre mappe en memoire
+        noCompress.add("tflite")
+    }
 }
+
+// Le modele d'embedding (~100 Mo) n'est pas versionne : telecharge au build si absent
+val embedderModel = file("src/main/assets/universal_sentence_encoder.tflite")
+val downloadEmbedderModel = tasks.register("downloadEmbedderModel") {
+    outputs.file(embedderModel)
+    doLast {
+        if (!embedderModel.exists()) {
+            embedderModel.parentFile.mkdirs()
+            uri(
+                "https://storage.googleapis.com/mediapipe-models/text_embedder/" +
+                    "universal_sentence_encoder/float32/latest/universal_sentence_encoder.tflite"
+            ).toURL().openStream().use { input ->
+                embedderModel.outputStream().use { input.copyTo(it) }
+            }
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(downloadEmbedderModel) }
 
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
@@ -87,6 +110,7 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.5")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
+    implementation("com.google.mediapipe:tasks-text:0.10.14")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

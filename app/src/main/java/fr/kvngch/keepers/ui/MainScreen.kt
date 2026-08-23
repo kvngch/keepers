@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestoreFromTrash
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
@@ -80,6 +81,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -109,6 +111,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
+import fr.kvngch.keepers.DisplayItem
 import fr.kvngch.keepers.Formats
 import fr.kvngch.keepers.Indexer
 import fr.kvngch.keepers.MainViewModel
@@ -124,6 +127,7 @@ import java.util.Locale
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -166,6 +170,8 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
     val query by vm.query.collectAsStateWithLifecycle()
     val f by vm.filters.collectAsStateWithLifecycle()
     val banner by vm.banner.collectAsStateWithLifecycle()
+    val pendingQueue by vm.pending.collectAsStateWithLifecycle()
+    var showQueue by remember { mutableStateOf(false) }
 
     var showNoteDialog by remember { mutableStateOf(false) }
     var editItem by remember { mutableStateOf<ItemEntity?>(null) }
@@ -416,7 +422,11 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
             var bannerText by remember { mutableStateOf("") }
             banner?.let { bannerText = it }
             AnimatedVisibility(visible = banner != null) {
-                ProcessingBanner(bannerText)
+                ProcessingBanner(
+                    bannerText,
+                    showQueueHint = pendingQueue.isNotEmpty(),
+                    onClick = { if (pendingQueue.isNotEmpty()) showQueue = true }
+                )
             }
 
             if (docs.isEmpty()) {
@@ -424,7 +434,7 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
             } else {
                 val grouped = remember(docs, f.sort) {
                     if (f.sort == Sort.TITLE) linkedMapOf("" to docs)
-                    else docs.groupByTo(LinkedHashMap()) { Formats.month(it.addedAt) }
+                    else docs.groupByTo(LinkedHashMap()) { Formats.month(it.item.addedAt) }
                 }
                 LazyColumn(
                     contentPadding = PaddingValues(
@@ -445,9 +455,11 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                                 )
                             }
                         }
-                        items(list, key = { it.id }) { item ->
+                        items(list, key = { it.item.id }) { d ->
+                            val item = d.item
                             ItemCard(
                                 item,
+                                semantic = d.semantic,
                                 isSelected = item.id in selected,
                                 onClick = {
                                     if (selected.isNotEmpty()) {
@@ -581,6 +593,15 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
         SettingsDialog(onDismiss = { showSettings = false })
     }
 
+    if (showQueue) {
+        QueueDialog(
+            queue = pendingQueue,
+            onRetry = vm::retryIndex,
+            onDelete = { vm.deleteForever(it) },
+            onDismiss = { showQueue = false }
+        )
+    }
+
     if (confirmBatchDelete) {
         AlertDialog(
             onDismissRequest = { confirmBatchDelete = false },
@@ -669,10 +690,15 @@ private fun LocalBadge() {
 }
 
 @Composable
-private fun ProcessingBanner(message: String) {
+private fun ProcessingBanner(
+    message: String,
+    showQueueHint: Boolean = false,
+    onClick: () -> Unit = {}
+) {
     Surface(
         color = MaterialTheme.colorScheme.secondaryContainer,
         shape = RoundedCornerShape(16.dp),
+        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 16.dp, end = 16.dp, top = 8.dp)
@@ -692,15 +718,123 @@ private fun ProcessingBanner(message: String) {
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = FontFamily.Monospace
                 ),
-                color = MaterialTheme.colorScheme.onSecondaryContainer
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
+            if (showQueueHint) {
+                Text(
+                    "FILE",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
         }
+    }
+}
+
+// File de traitement : chaque document en attente avec son etape et son anciennete
+@Composable
+private fun QueueDialog(
+    queue: List<ItemEntity>,
+    onRetry: (ItemEntity) -> Unit,
+    onDelete: (ItemEntity) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("File de traitement") },
+        text = {
+            if (queue.isEmpty()) {
+                Text("Tout est indexé.", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                LazyColumn(
+                    Modifier.heightIn(max = 400.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(queue, key = { it.id }) { item ->
+                        val error = item.status.startsWith("Erreur")
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            if (error) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "En erreur",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            } else {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    item.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    (item.status.ifBlank { "En attente..." }) +
+                                        "  ${elapsed(item.addedAt, now)}",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = FontFamily.Monospace
+                                    ),
+                                    color = if (error) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (error) {
+                                IconButton(onClick = { onRetry(item) }) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Relancer")
+                                }
+                                IconButton(onClick = { onDelete(item) }) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Abandonner",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Fermer") }
+        }
+    )
+}
+
+private fun elapsed(since: Long, now: Long): String {
+    val s = ((now - since) / 1000).coerceAtLeast(0)
+    return when {
+        s < 60 -> "depuis $s s"
+        s < 3_600 -> "depuis ${s / 60} min"
+        else -> "depuis ${s / 3_600} h"
     }
 }
 
 @Composable
 private fun ItemCard(
     item: ItemEntity,
+    semantic: Boolean = false,
     isSelected: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {}
@@ -781,12 +915,16 @@ private fun ItemCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.weight(1f))
+                    if (semantic) {
+                        SemanticBadge()
+                        Spacer(Modifier.width(6.dp))
+                    }
                     val due = item.dueDate
                     if (due != null && due > System.currentTimeMillis()) {
                         DueBadge(due)
                         Spacer(Modifier.width(6.dp))
                     }
-                    if (item.indexed) IndexedBadge() else PendingBadge()
+                    if (item.indexed) IndexedBadge() else PendingBadge(item.status)
                 }
             }
         }
@@ -857,22 +995,56 @@ private fun IndexedBadge() {
 }
 
 @Composable
-private fun PendingBadge() {
+private fun PendingBadge(status: String) {
+    val error = status.startsWith("Erreur")
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(12.dp),
-            strokeWidth = 2.dp,
-            color = MaterialTheme.colorScheme.primary
-        )
+        if (error) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(12.dp)
+            )
+        } else {
+            CircularProgressIndicator(
+                modifier = Modifier.size(12.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
         Text(
-            "Indexation",
+            when {
+                error -> "Erreur"
+                status.isBlank() -> "En attente"
+                else -> status.removeSuffix("...")
+            },
             style = MaterialTheme.typography.labelSmall.copy(
                 fontFamily = FontFamily.Monospace
             ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (error) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun SemanticBadge() {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        Text(
+            "≈ sens",
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = FontFamily.Monospace
+            ),
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
         )
     }
 }

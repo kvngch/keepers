@@ -37,7 +37,10 @@ data class ItemEntity(
     @ColumnInfo(defaultValue = "") val extracted: String = "",
     @ColumnInfo(defaultValue = "0") val fileEnc: Boolean = false,
     @ColumnInfo(defaultValue = "0") val dueNotified: Boolean = false,
-    val thumb: ByteArray? = null
+    val thumb: ByteArray? = null,
+    // etape de traitement en cours (vide = rien en cours), vecteur semantique
+    @ColumnInfo(defaultValue = "") val status: String = "",
+    val embedding: ByteArray? = null
 )
 
 @Fts4(tokenizer = FtsOptions.TOKENIZER_UNICODE61)
@@ -94,6 +97,18 @@ interface ItemDao {
     @Query("UPDATE items SET deletedAt = NULL WHERE id = :id")
     suspend fun restoreFromTrash(id: Long)
 
+    @Query("SELECT * FROM items WHERE indexed = 0 AND deletedAt IS NULL ORDER BY addedAt ASC")
+    fun pending(): Flow<List<ItemEntity>>
+
+    @Query("UPDATE items SET status = :s WHERE id = :id")
+    suspend fun setStatus(id: Long, s: String)
+
+    @Query("SELECT * FROM items WHERE indexed = 1 AND embedding IS NULL AND deletedAt IS NULL")
+    suspend fun missingEmbedding(): List<ItemEntity>
+
+    @Query("UPDATE items SET embedding = :vec WHERE id = :id")
+    suspend fun updateEmbedding(id: Long, vec: ByteArray)
+
     @Insert
     suspend fun insert(item: ItemEntity): Long
 
@@ -130,7 +145,14 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [ItemEntity::class, ItemFts::class], version = 2, exportSchema = true)
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE items ADD COLUMN status TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE items ADD COLUMN embedding BLOB")
+    }
+}
+
+@Database(entities = [ItemEntity::class, ItemFts::class], version = 3, exportSchema = true)
 abstract class AppDb : RoomDatabase() {
 
     abstract fun itemDao(): ItemDao
@@ -147,7 +169,7 @@ abstract class AppDb : RoomDatabase() {
                     val passphrase = DbKey.passphrase(app, app.getDatabasePath("keepers.db"))
                     Room.databaseBuilder(app, AppDb::class.java, "keepers.db")
                         .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                        .addMigrations(MIGRATION_1_2)
+                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                         .build().also { instance = it }
                 }
             }

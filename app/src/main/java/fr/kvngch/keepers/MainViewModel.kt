@@ -5,7 +5,6 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.work.WorkManager
 import fr.kvngch.keepers.data.AppDb
 import fr.kvngch.keepers.data.EncFile
 import fr.kvngch.keepers.data.ItemEntity
@@ -14,15 +13,16 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class TypeFilter(val label: String) {
     ALL("Tous"), NOTES("Notes"), IMAGES("Images"), PDF("PDF"), OTHER("Autres")
@@ -44,6 +44,9 @@ data class Filters(
     val trash: Boolean = false
 )
 
+// semantic = trouve par similarite de sens, pas par les mots-cles
+data class DisplayItem(val item: ItemEntity, val semantic: Boolean = false)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -54,25 +57,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val filters = MutableStateFlow(Filters())
     private val processing = MutableStateFlow<String?>(null)
 
-    private val working: Flow<Boolean> = WorkManager.getInstance(app)
-        .getWorkInfosByTagFlow(IndexWorker.TAG)
-        .map { infos -> infos.any { !it.state.isFinished } }
+    // File de traitement : tous les elements pas encore indexes, dans l'ordre d'arrivee
+    val pending: StateFlow<List<ItemEntity>> = dao.pending()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val banner: StateFlow<String?> = combine(processing, working) { p, w ->
-        p ?: if (w) "Analyse et indexation locales en cours..." else null
+    val banner: StateFlow<String?> = combine(processing, pending) { p, queue ->
+        p ?: when {
+            queue.isEmpty() -> null
+            else -> {
+                val active = queue.firstOrNull { it.status.isNotBlank() && !it.status.startsWith("Erreur") }
+                val head = active?.let { "${it.status.removeSuffix("...")} : ${it.title}" }
+                    ?: "En attente d'indexation"
+                if (queue.size == 1) head else "$head (+${queue.size - 1} en file)"
+            }
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    val items: StateFlow<List<ItemEntity>> = combine(query, filters) { q, f -> q to f }
+    val items: StateFlow<List<DisplayItem>> = combine(query, filters) { q, f -> q to f }
         .flatMapLatest { (q, f) ->
-            val base = when {
-                f.trash -> dao.trash()
-                q.isBlank() -> dao.all()
+            when {
+                f.trash -> dao.trash().map { l -> applyFilters(l, f).map { DisplayItem(it) } }
+                q.isBlank() -> dao.all().map { l -> applyFilters(l, f).map { DisplayItem(it) } }
                 else -> {
                     val match = ftsQuery(q)
-                    if (match.isBlank()) dao.all() else dao.searchFts(match)
+                    val queryVec = withContext(Dispatchers.IO) {
+                        Embedder.embed(getApplication(), q)
+                    }
+                    val ftsFlow = if (match.isBlank()) flowOf(emptyList()) else dao.searchFts(match)
+                    combine(dao.all(), ftsFlow) { all, fts ->
+                        val exact = applyFilters(fts, f)
+                        val exactIds = exact.mapTo(HashSet()) { it.id }
+                        val semantic = if (queryVec == null) emptyList() else {
+                            applyFilters(all, f)
+                                .asSequence()
+                                .filter { it.id !in exactIds && it.embedding != null }
+                                .map { it to Embedder.cosine(queryVec, Embedder.fromBytes(it.embedding!!)) }
+                                .filter { it.second > 0.4f }
+                                .sortedByDescending { it.second }
+                                .take(10)
+                                .map { it.first }
+                                .toList()
+                        }
+                        exact.map { DisplayItem(it) } +
+                            semantic.map { DisplayItem(it, semantic = true) }
+                    }
                 }
             }
-            base.map { list -> applyFilters(list, f) }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -89,6 +119,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     dao.update(item.copy(fileEnc = true))
                 }
             }
+            // rattrapage < 2.2.0 : vectorise les elements indexes avant l'embedding
+            for (item in dao.missingEmbedding()) {
+                val vec = Embedder.embed(getApplication(), Indexer.embeddingText(item))
+                    ?: break // modele indisponible, inutile d'insister
+                dao.updateEmbedding(item.id, Embedder.toBytes(vec))
+            }
+        }
+    }
+
+    fun retryIndex(item: ItemEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            dao.setStatus(item.id, "")
+            IndexWorker.enqueue(getApplication(), item.id)
         }
     }
 
@@ -146,8 +189,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             withBanner("Indexation de la note en cours...") {
                 val a = Indexer.analyze(body)
+                val cleanTitle = title.ifBlank { body.lineSequence().first().take(60) }
+                val vec = Embedder.embed(getApplication(), "$cleanTitle ${body.take(1_000)}")
                 val item = ItemEntity(
-                    title = title.ifBlank { body.lineSequence().first().take(60) },
+                    title = cleanTitle,
                     format = ".txt",
                     sizeBytes = body.toByteArray().size.toLong(),
                     addedAt = System.currentTimeMillis(),
@@ -156,7 +201,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     indexed = true,
                     filePath = null,
                     extracted = a.extracted,
-                    dueDate = a.dueDate
+                    dueDate = a.dueDate,
+                    embedding = vec?.let(Embedder::toBytes)
                 )
                 val id = dao.insert(item)
                 dao.upsertFts(ItemFts(id, item.title, item.summary, item.content))
@@ -167,13 +213,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun updateNote(item: ItemEntity, title: String, body: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val a = Indexer.analyze(body)
+            val newTitle = title.ifBlank { item.title }
+            val vec = Embedder.embed(getApplication(), "$newTitle ${body.take(1_000)}")
             val updated = item.copy(
-                title = title.ifBlank { item.title },
+                title = newTitle,
                 content = body,
                 summary = a.summary,
                 extracted = a.extracted,
                 dueDate = a.dueDate,
-                sizeBytes = body.toByteArray().size.toLong()
+                sizeBytes = body.toByteArray().size.toLong(),
+                embedding = vec?.let(Embedder::toBytes) ?: item.embedding
             )
             dao.update(updated)
             dao.upsertFts(ItemFts(item.id, updated.title, updated.summary, updated.content))

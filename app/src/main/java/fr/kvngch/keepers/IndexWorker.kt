@@ -26,6 +26,9 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                 applicationContext, dao, item, recognizer,
                 maxPdfPages = Prefs.pdfMaxPages(applicationContext)
             )
+        } catch (e: Exception) {
+            // l'element reste visible dans la file avec son erreur, relancable a la main
+            dao.setStatus(id, "Erreur : indexation interrompue")
         } finally {
             recognizer.close()
         }
