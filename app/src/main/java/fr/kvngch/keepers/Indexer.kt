@@ -21,6 +21,24 @@ import java.util.GregorianCalendar
 import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 
+enum class Category(val id: String, val label: String) {
+    FACTURE("facture", "Factures"),
+    RECU("recu", "Reçus"),
+    CONTRAT("contrat", "Contrats"),
+    GARANTIE("garantie", "Garanties"),
+    BANQUE("banque", "Banque"),
+    IMPOTS("impots", "Impôts"),
+    SANTE("sante", "Santé"),
+    IDENTITE("identite", "Identité"),
+    ASSURANCE("assurance", "Assurance"),
+    NOTE("note", "Notes"),
+    AUTRE("autre", "Autres");
+
+    companion object {
+        fun byId(id: String): Category = entries.firstOrNull { it.id == id } ?: AUTRE
+    }
+}
+
 // Toute l'analyse locale d'un document : OCR, PDF, resume extractif, dates et montants,
 // miniature. Utilise par IndexWorker (fichiers) et par le ViewModel (notes).
 object Indexer {
@@ -77,6 +95,7 @@ object Indexer {
                 dueDate = a.dueDate,
                 thumb = thumb,
                 embedding = embedding?.let(Embedder::toBytes),
+                category = classify(item.title, content, isNote = false).id,
                 status = "",
                 indexed = true
             )
@@ -89,6 +108,58 @@ object Indexer {
 
     fun embeddingText(item: ItemEntity): String =
         item.title + " " + item.content.take(1_000)
+
+    // Classification par mots-cles ponderes sur le texte extrait.
+    // ponytail: heuristique lexicale, remplacable par le classifieur semantique
+    // (cosinus avec des phrases prototypes par categorie) si elle se revele trop fragile
+    private val KEYWORDS: Map<Category, List<Pair<String, Int>>> = mapOf(
+        Category.FACTURE to listOf(
+            "facture" to 3, "tva" to 2, "ttc" to 2, "net à payer" to 3, "montant dû" to 3
+        ),
+        Category.RECU to listOf(
+            "reçu" to 3, "ticket de caisse" to 3, "total payé" to 3,
+            "espèces" to 2, "carte bancaire" to 2
+        ),
+        Category.CONTRAT to listOf(
+            "contrat" to 3, "conditions générales" to 3, "soussigné" to 3,
+            "bail" to 3, "résiliation" to 2, "les parties" to 2
+        ),
+        Category.GARANTIE to listOf(
+            "garantie" to 3, "warranty" to 3, "extension de garantie" to 3
+        ),
+        Category.BANQUE to listOf(
+            "relevé de compte" to 3, "virement" to 2, "solde" to 2, "iban" to 2, "banque" to 2
+        ),
+        Category.IMPOTS to listOf(
+            "impôt" to 3, "dgfip" to 3, "avis d'imposition" to 3,
+            "prélèvement à la source" to 3, "taxe" to 2, "fiscal" to 2
+        ),
+        Category.SANTE to listOf(
+            "ordonnance" to 3, "cpam" to 3, "mutuelle" to 2, "pharmacie" to 2,
+            "docteur" to 2, "sécurité sociale" to 2
+        ),
+        Category.IDENTITE to listOf(
+            "passeport" to 3, "carte nationale d'identité" to 3, "permis de conduire" to 3
+        ),
+        Category.ASSURANCE to listOf(
+            "assurance" to 3, "sinistre" to 3, "assuré" to 2, "attestation" to 1
+        )
+    )
+
+    fun classify(title: String, content: String, isNote: Boolean): Category {
+        if (isNote) return Category.NOTE
+        val text = "$title $content".lowercase()
+        var best = Category.AUTRE
+        var bestScore = 0
+        for ((cat, words) in KEYWORDS) {
+            val score = words.sumOf { (w, weight) -> if (text.contains(w)) weight else 0 }
+            if (score > bestScore) {
+                bestScore = score
+                best = cat
+            }
+        }
+        return if (bestScore >= 3) best else Category.AUTRE
+    }
 
     // Resume extractif local : les deux phrases les plus denses en mots frequents.
     // ponytail: heuristique simple; Gemini Nano (AICore) si un appareil compatible arrive.

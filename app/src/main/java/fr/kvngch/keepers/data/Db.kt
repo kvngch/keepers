@@ -40,7 +40,9 @@ data class ItemEntity(
     val thumb: ByteArray? = null,
     // etape de traitement en cours (vide = rien en cours), vecteur semantique
     @ColumnInfo(defaultValue = "") val status: String = "",
-    val embedding: ByteArray? = null
+    val embedding: ByteArray? = null,
+    // id de categorie detectee (Category.id), vide = pas encore classe
+    @ColumnInfo(defaultValue = "") val category: String = ""
 )
 
 @Fts4(tokenizer = FtsOptions.TOKENIZER_UNICODE61)
@@ -152,7 +154,13 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
-@Database(entities = [ItemEntity::class, ItemFts::class], version = 3, exportSchema = true)
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE items ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+@Database(entities = [ItemEntity::class, ItemFts::class], version = 4, exportSchema = true)
 abstract class AppDb : RoomDatabase() {
 
     abstract fun itemDao(): ItemDao
@@ -169,7 +177,7 @@ abstract class AppDb : RoomDatabase() {
                     val passphrase = DbKey.passphrase(app, app.getDatabasePath("keepers.db"))
                     Room.databaseBuilder(app, AppDb::class.java, "keepers.db")
                         .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                         .build().also { instance = it }
                 }
             }

@@ -46,13 +46,18 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Image as ImageIcon
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Pending
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.RestoreFromTrash
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
@@ -60,16 +65,21 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -85,6 +95,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -111,6 +122,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
+import fr.kvngch.keepers.Category
 import fr.kvngch.keepers.DisplayItem
 import fr.kvngch.keepers.Formats
 import fr.kvngch.keepers.Indexer
@@ -128,6 +140,7 @@ import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -183,8 +196,12 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
     var restoreAskUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var pendingExportPw by remember { mutableStateOf<String?>(null) }
     var showSettings by remember { mutableStateOf(false) }
+    var showAbout by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(setOf<Long>()) }
     var confirmBatchDelete by remember { mutableStateOf(false) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    val counts by vm.counts.collectAsStateWithLifecycle()
 
     LaunchedEffect(f.trash) { selected = emptySet() }
 
@@ -273,6 +290,146 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
         }
     }
 
+    val closeDrawer: () -> Unit = { scope.launch { drawerState.close() } }
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 12.dp)
+                ) {
+                    Text(
+                        "Keepers",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(horizontal = 28.dp)
+                    )
+                    Text(
+                        "Coffre local chiffré",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 4.dp)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Tous les documents") },
+                        selected = !f.trash && !f.due && f.category == null,
+                        onClick = {
+                            vm.resetNav()
+                            closeDrawer()
+                        },
+                        icon = { Icon(Icons.Default.Shield, contentDescription = null) },
+                        badge = { Text("${counts.total}") },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Échéances à venir") },
+                        selected = f.due,
+                        onClick = {
+                            vm.showDue()
+                            closeDrawer()
+                        },
+                        icon = { Icon(Icons.Default.Schedule, contentDescription = null) },
+                        badge = { Text("${counts.due}") },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    Text(
+                        "CATÉGORIES",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 4.dp)
+                    )
+                    Category.entries.forEach { cat ->
+                        val n = counts.byCat[cat.id] ?: 0
+                        if (n > 0) {
+                            NavigationDrawerItem(
+                                label = { Text(cat.label) },
+                                selected = f.category == cat.id,
+                                onClick = {
+                                    vm.setCategory(cat.id)
+                                    closeDrawer()
+                                },
+                                badge = { Text("$n") },
+                                modifier = Modifier.padding(
+                                    NavigationDrawerItemDefaults.ItemPadding
+                                )
+                            )
+                        }
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    NavigationDrawerItem(
+                        label = { Text("Corbeille") },
+                        selected = f.trash,
+                        onClick = {
+                            vm.openTrash()
+                            closeDrawer()
+                        },
+                        icon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("File de traitement") },
+                        selected = false,
+                        onClick = {
+                            showQueue = true
+                            closeDrawer()
+                        },
+                        icon = { Icon(Icons.Default.Pending, contentDescription = null) },
+                        badge = {
+                            if (pendingQueue.isNotEmpty()) Text("${pendingQueue.size}")
+                        },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Exporter le coffre") },
+                        selected = false,
+                        onClick = {
+                            exportAsk = true
+                            closeDrawer()
+                        },
+                        icon = { Icon(Icons.Default.Save, contentDescription = null) },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Restaurer une sauvegarde") },
+                        selected = false,
+                        onClick = {
+                            restorePicker.launch(arrayOf("*/*"))
+                            closeDrawer()
+                        },
+                        icon = { Icon(Icons.Default.Restore, contentDescription = null) },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Réglages") },
+                        selected = false,
+                        onClick = {
+                            showSettings = true
+                            closeDrawer()
+                        },
+                        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("À propos") },
+                        selected = false,
+                        onClick = {
+                            showAbout = true
+                            closeDrawer()
+                        },
+                        icon = { Icon(Icons.Default.Info, contentDescription = null) },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                }
+            }
+        }
+    ) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         floatingActionButton = {
@@ -338,41 +495,17 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(start = 20.dp, end = 8.dp, top = 4.dp),
+                        .padding(start = 8.dp, end = 8.dp, top = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(Icons.Default.Menu, contentDescription = "Ouvrir le menu")
+                    }
                     Text(
                         "Keepers",
                         style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.weight(1f)
                     )
-                    var menuOpen by remember { mutableStateOf(false) }
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Menu")
-                    }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Réglages") },
-                            onClick = {
-                                menuOpen = false
-                                showSettings = true
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Exporter le coffre") },
-                            onClick = {
-                                menuOpen = false
-                                exportAsk = true
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Restaurer une sauvegarde") },
-                            onClick = {
-                                menuOpen = false
-                                restorePicker.launch(arrayOf("*/*"))
-                            }
-                        )
-                    }
                 }
             }
 
@@ -382,6 +515,38 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                f.category?.let { c ->
+                    item {
+                        FilterChip(
+                            selected = true,
+                            onClick = { vm.setCategory(null) },
+                            label = { Text(Category.byId(c).label) },
+                            trailingIcon = {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Retirer le filtre de catégorie",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        )
+                    }
+                }
+                if (f.due) {
+                    item {
+                        FilterChip(
+                            selected = true,
+                            onClick = { vm.resetNav() },
+                            label = { Text("Échéances") },
+                            trailingIcon = {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Retirer le filtre d'échéances",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        )
+                    }
+                }
                 items(TypeFilter.entries) { t ->
                     FilterChip(
                         selected = f.type == t,
@@ -481,6 +646,7 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
                 }
             }
         }
+    }
     }
 
     if (showNoteDialog) {
@@ -599,6 +765,44 @@ fun MainScreen(vm: MainViewModel, startAction: String?) {
             onRetry = vm::retryIndex,
             onDelete = { vm.deleteForever(it) },
             onDismiss = { showQueue = false }
+        )
+    }
+
+    if (showAbout) {
+        val version = remember {
+            runCatching {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName
+            }.getOrNull() ?: "?"
+        }
+        AlertDialog(
+            onDismissRequest = { showAbout = false },
+            title = { Text("Keepers $version") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Coffre-fort personnel 100 % local. Base et fichiers chiffrés, " +
+                            "OCR, indexation et recherche sémantique exécutés sur l'appareil, " +
+                            "aucune permission réseau.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        "Rappel : l'export chiffré est votre seule sauvegarde. " +
+                            "Un téléphone perdu sans export est un coffre perdu.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "github.com/kvngch/keepers",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAbout = false }) { Text("Fermer") }
+            }
         )
     }
 
@@ -882,12 +1086,34 @@ private fun ItemCard(
                 Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    item.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        item.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    val cat = Category.byId(item.category)
+                    if (item.category.isNotBlank() && cat != Category.AUTRE && cat != Category.NOTE) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh
+                        ) {
+                            Text(
+                                cat.label,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
                 Text(
                     item.summary,
                     style = MaterialTheme.typography.bodyMedium,

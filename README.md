@@ -26,6 +26,10 @@ Pour recevoir les mises à jour automatiquement, ajouter le dépôt dans
 - File de traitement visible : la bannière indique l'étape en cours (OCR, analyse,
   vectorisation) et ouvre la liste des documents en attente avec leur ancienneté;
   les indexations en erreur sont relançables d'un geste
+- Classification automatique locale des documents (factures, reçus, contrats, garanties,
+  banque, impôts, santé, identité, assurance) à partir du texte extrait
+- Menu de navigation : catégories avec compteurs, échéances à venir, corbeille, file de
+  traitement, sauvegarde et réglages
 - Filtres par type (notes, images, PDF), par période, tri, regroupement par mois
 - Scanner de documents (recadrage automatique, multi-pages) avec repli sur l'appareil
   photo, import multiple de fichiers, note rapide, partage vers Keepers depuis

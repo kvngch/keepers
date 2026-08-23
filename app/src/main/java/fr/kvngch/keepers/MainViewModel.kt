@@ -41,7 +41,15 @@ data class Filters(
     val type: TypeFilter = TypeFilter.ALL,
     val range: RangeFilter = RangeFilter.ALL,
     val sort: Sort = Sort.RECENT,
-    val trash: Boolean = false
+    val trash: Boolean = false,
+    val category: String? = null,
+    val due: Boolean = false
+)
+
+data class NavCounts(
+    val total: Int = 0,
+    val due: Int = 0,
+    val byCat: Map<String, Int> = emptyMap()
 )
 
 // semantic = trouve par similarite de sens, pas par les mots-cles
@@ -60,6 +68,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // File de traitement : tous les elements pas encore indexes, dans l'ordre d'arrivee
     val pending: StateFlow<List<ItemEntity>> = dao.pending()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // Compteurs du menu de navigation
+    val counts: StateFlow<NavCounts> = dao.all().map { l ->
+        val now = System.currentTimeMillis()
+        NavCounts(
+            total = l.size,
+            due = l.count { (it.dueDate ?: 0) > now },
+            byCat = l.groupingBy { it.category.ifBlank { Category.AUTRE.id } }.eachCount()
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NavCounts())
 
     val banner: StateFlow<String?> = combine(processing, pending) { p, queue ->
         p ?: when {
@@ -125,6 +143,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ?: break // modele indisponible, inutile d'insister
                 dao.updateEmbedding(item.id, Embedder.toBytes(vec))
             }
+            // rattrapage < 2.3.0 : classe les elements indexes avant la classification
+            dao.allOnce().filter { it.category.isBlank() && it.indexed }.forEach { item ->
+                dao.update(
+                    item.copy(
+                        category = Indexer.classify(
+                            item.title, item.content, isNote = item.filePath == null
+                        ).id
+                    )
+                )
+            }
         }
     }
 
@@ -155,6 +183,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         filters.value = filters.value.copy(trash = !filters.value.trash)
     }
 
+    fun setCategory(id: String?) {
+        filters.value = filters.value.copy(category = id, trash = false, due = false)
+    }
+
+    fun showDue() {
+        filters.value = filters.value.copy(due = true, trash = false, category = null)
+    }
+
+    fun openTrash() {
+        filters.value = filters.value.copy(trash = true)
+    }
+
+    fun resetNav() {
+        filters.value = filters.value.copy(category = null, due = false, trash = false)
+    }
+
     private fun <T> next(all: List<T>, cur: T): T = all[(all.indexOf(cur) + 1) % all.size]
 
     private fun applyFilters(list: List<ItemEntity>, f: Filters): List<ItemEntity> {
@@ -170,6 +214,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         f.range.days?.let { d ->
             val min = System.currentTimeMillis() - d * 86_400_000
             l = l.filter { it.addedAt >= min }
+        }
+        f.category?.let { c ->
+            l = l.filter { it.category.ifBlank { Category.AUTRE.id } == c }
+        }
+        if (f.due) {
+            val now = System.currentTimeMillis()
+            return l.filter { (it.dueDate ?: 0) > now }.sortedBy { it.dueDate }
         }
         return when (f.sort) {
             Sort.RECENT -> l.sortedByDescending { it.addedAt }
@@ -202,7 +253,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     filePath = null,
                     extracted = a.extracted,
                     dueDate = a.dueDate,
-                    embedding = vec?.let(Embedder::toBytes)
+                    embedding = vec?.let(Embedder::toBytes),
+                    category = Category.NOTE.id
                 )
                 val id = dao.insert(item)
                 dao.upsertFts(ItemFts(id, item.title, item.summary, item.content))
