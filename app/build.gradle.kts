@@ -73,13 +73,29 @@ val embedderModel = file("src/main/assets/universal_sentence_encoder.tflite")
 val downloadEmbedderModel = tasks.register("downloadEmbedderModel") {
     outputs.file(embedderModel)
     doLast {
-        if (!embedderModel.exists()) {
-            embedderModel.parentFile.mkdirs()
-            uri(
-                "https://storage.googleapis.com/mediapipe-models/text_embedder/" +
-                    "universal_sentence_encoder/float32/latest/universal_sentence_encoder.tflite"
-            ).toURL().openStream().use { input ->
-                embedderModel.outputStream().use { input.copyTo(it) }
+        if (embedderModel.exists()) return@doLast
+        embedderModel.parentFile.mkdirs()
+        val url = uri(
+            "https://storage.googleapis.com/mediapipe-models/text_embedder/" +
+                "universal_sentence_encoder/float32/latest/universal_sentence_encoder.tflite"
+        ).toURL()
+        val tmp = File(embedderModel.path + ".part")
+        var attempt = 0
+        while (true) {
+            attempt++
+            try {
+                val conn = url.openConnection()
+                conn.connectTimeout = 30_000
+                conn.readTimeout = 180_000
+                conn.getInputStream().use { input ->
+                    tmp.outputStream().use { input.copyTo(it) }
+                }
+                check(tmp.renameTo(embedderModel))
+                break
+            } catch (e: Exception) {
+                tmp.delete()
+                if (attempt >= 4) throw e
+                Thread.sleep(5_000L * attempt)
             }
         }
     }
