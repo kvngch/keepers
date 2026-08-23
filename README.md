@@ -17,6 +17,8 @@ Chaque release inclut l'empreinte SHA-256 de l'APK.
 - Recherche en langage naturel sur les titres, résumés et contenus, exécutée localement
 - Ingestion par capture photo, import de fichier ou note rapide (bouton flottant)
 - Extraction et indexation locales du texte des fichiers importés
+- OCR on-device (ML Kit Text Recognition, modèle embarqué dans l'APK) sur les captures
+  photo et les images importées : le texte reconnu devient cherchable
 - Cartes de documents avec résumé sur deux lignes, métadonnées (date, format, taille) et
   badge d'indexation
 - Thème Material 3 complet en mode clair et en mode sombre (fonds mats pensés pour OLED),
@@ -26,7 +28,9 @@ Chaque release inclut l'empreinte SHA-256 de l'APK.
 
 Le stockage se fait dans l'espace privé de l'application (base Room et fichiers internes).
 Rien ne quitte l'appareil : pas de télémétrie, pas de synchronisation, pas de permission
-Internet dans le manifeste.
+Internet dans le manifeste. L'OCR utilise la variante bundled de ML Kit : le modèle est
+inclus dans l'APK et la reconnaissance s'exécute entièrement sur l'appareil, sans
+téléchargement ni Google Play Services.
 
 ## Build
 

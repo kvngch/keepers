@@ -5,9 +5,13 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import fr.kvngch.keepers.data.AppDb
 import fr.kvngch.keepers.data.ItemEntity
 import java.io.File
+import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -17,12 +21,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val dao = AppDb.get(app).itemDao()
     private val docsDir = File(app.filesDir, "docs").apply { mkdirs() }
+    private val recognizer by lazy {
+        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    }
 
     val query = MutableStateFlow("")
     val processing = MutableStateFlow<String?>(null)
@@ -81,11 +89,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val mime = resolver.getType(uri) ?: ""
                 val textual = mime.startsWith("text/") ||
                     ext in setOf("txt", "md", "csv", "json", "log")
-                // ponytail: extraction texte brut seulement; OCR et parsing PDF a ajouter
-                // si le besoin se confirme (ML Kit / pdfbox-android, tout reste on-device)
-                val content = if (textual && size <= 5_000_000) {
-                    runCatching { dest.readText().take(100_000) }.getOrDefault("")
-                } else ""
+                val image = mime.startsWith("image/") ||
+                    ext in setOf("jpg", "jpeg", "png", "webp", "bmp")
+                // ponytail: parsing PDF absent; pdfbox-android (on-device) si le besoin arrive
+                val content = when {
+                    textual && size <= 5_000_000 ->
+                        runCatching { dest.readText().take(100_000) }.getOrDefault("")
+                    image -> {
+                        processing.value = "Reconnaissance du texte (OCR local) en cours..."
+                        ocr(dest)
+                    }
+                    else -> ""
+                }
 
                 processing.value = "Extraction des données du document en cours..."
                 dao.insert(
@@ -94,8 +109,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         format = if (ext.isBlank()) "fichier" else ".$ext",
                         sizeBytes = size,
                         addedAt = System.currentTimeMillis(),
-                        summary = if (content.isNotBlank()) summarize(content)
-                        else "Fichier stocké localement. Métadonnées indexées, contenu non extrait.",
+                        summary = when {
+                            content.isNotBlank() -> summarize(content)
+                            image -> "Image stockée localement, aucun texte détecté par l'OCR."
+                            else -> "Fichier stocké localement. Métadonnées indexées, contenu non extrait."
+                        },
                         content = content,
                         indexed = true,
                         filePath = dest.absolutePath
@@ -108,14 +126,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun ingestCapture(file: File) {
         viewModelScope.launch(Dispatchers.IO) {
             withBanner("Extraction des données du reçu en cours...") {
+                val content = ocr(file)
                 dao.insert(
                     ItemEntity(
                         title = "Capture du ${Formats.dateTime(System.currentTimeMillis())}",
                         format = ".jpg",
                         sizeBytes = file.length(),
                         addedAt = System.currentTimeMillis(),
-                        summary = "Capture photo stockée localement. Métadonnées indexées.",
-                        content = "",
+                        summary = if (content.isNotBlank()) summarize(content)
+                        else "Capture photo stockée localement, aucun texte détecté par l'OCR.",
+                        content = content,
                         indexed = true,
                         filePath = file.absolutePath
                     )
@@ -129,6 +149,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             item.filePath?.let { File(it).delete() }
             dao.delete(item)
         }
+    }
+
+    private suspend fun ocr(file: File): String = suspendCancellableCoroutine { cont ->
+        val input = runCatching {
+            InputImage.fromFilePath(getApplication(), Uri.fromFile(file))
+        }.getOrNull()
+        if (input == null) {
+            cont.resume("")
+            return@suspendCancellableCoroutine
+        }
+        recognizer.process(input)
+            .addOnSuccessListener { cont.resume(it.text.take(100_000)) }
+            .addOnFailureListener { cont.resume("") }
+    }
+
+    override fun onCleared() {
+        recognizer.close()
     }
 
     private fun summarize(text: String): String =
