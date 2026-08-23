@@ -1,7 +1,12 @@
 package fr.kvngch.keepers
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Matrix
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -91,10 +96,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ext in setOf("txt", "md", "csv", "json", "log")
                 val image = mime.startsWith("image/") ||
                     ext in setOf("jpg", "jpeg", "png", "webp", "bmp")
-                // ponytail: parsing PDF absent; pdfbox-android (on-device) si le besoin arrive
+                val pdf = mime == "application/pdf" || ext == "pdf"
                 val content = when {
                     textual && size <= 5_000_000 ->
                         runCatching { dest.readText().take(100_000) }.getOrDefault("")
+                    pdf -> {
+                        processing.value = "Analyse des pages du PDF (OCR local) en cours..."
+                        pdfText(dest)
+                    }
                     image -> {
                         processing.value = "Reconnaissance du texte (OCR local) en cours..."
                         ocr(dest)
@@ -111,7 +120,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         addedAt = System.currentTimeMillis(),
                         summary = when {
                             content.isNotBlank() -> summarize(content)
-                            image -> "Image stockée localement, aucun texte détecté par l'OCR."
+                            image || pdf -> "Document stocké localement, aucun texte détecté par l'OCR."
                             else -> "Fichier stocké localement. Métadonnées indexées, contenu non extrait."
                         },
                         content = content,
@@ -162,6 +171,50 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         recognizer.process(input)
             .addOnSuccessListener { cont.resume(it.text.take(100_000)) }
             .addOnFailureListener { cont.resume("") }
+    }
+
+    private suspend fun ocrBitmap(bitmap: Bitmap): String =
+        suspendCancellableCoroutine { cont ->
+            recognizer.process(InputImage.fromBitmap(bitmap, 0))
+                .addOnSuccessListener { cont.resume(it.text) }
+                .addOnFailureListener { cont.resume("") }
+        }
+
+    // PDF numerique ou scanne : chaque page est rendue par PdfRenderer puis passee a
+    // l'OCR local, aucune dependance de parsing supplementaire.
+    private suspend fun pdfText(file: File): String {
+        val sb = StringBuilder()
+        runCatching {
+            ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                PdfRenderer(pfd).use { renderer ->
+                    // ponytail: cap a 10 pages pour borner temps et memoire; a relever
+                    // si des documents longs doivent etre indexes en entier
+                    val pages = minOf(renderer.pageCount, 10)
+                    for (i in 0 until pages) {
+                        val page = renderer.openPage(i)
+                        try {
+                            val scale = 2f
+                            val bitmap = Bitmap.createBitmap(
+                                (page.width * scale).toInt(),
+                                (page.height * scale).toInt(),
+                                Bitmap.Config.ARGB_8888
+                            )
+                            bitmap.eraseColor(Color.WHITE)
+                            val matrix = Matrix().apply { setScale(scale, scale) }
+                            page.render(
+                                bitmap, null, matrix,
+                                PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
+                            )
+                            sb.append(ocrBitmap(bitmap)).append('\n')
+                            bitmap.recycle()
+                        } finally {
+                            page.close()
+                        }
+                    }
+                }
+            }
+        }
+        return sb.toString().trim().take(100_000)
     }
 
     override fun onCleared() {

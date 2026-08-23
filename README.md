@@ -19,6 +19,8 @@ Chaque release inclut l'empreinte SHA-256 de l'APK.
 - Extraction et indexation locales du texte des fichiers importés
 - OCR on-device (ML Kit Text Recognition, modèle embarqué dans l'APK) sur les captures
   photo et les images importées : le texte reconnu devient cherchable
+- Indexation des PDF, numériques comme scannés : les pages (10 premières) sont rendues
+  par le moteur PDF natif d'Android puis passées dans le même OCR local
 - Cartes de documents avec résumé sur deux lignes, métadonnées (date, format, taille) et
   badge d'indexation
 - Thème Material 3 complet en mode clair et en mode sombre (fonds mats pensés pour OLED),
