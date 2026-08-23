@@ -29,6 +29,9 @@ Chaque release inclut l'empreinte SHA-256 de l'APK.
 ## Confidentialité
 
 Le stockage se fait dans l'espace privé de l'application (base Room et fichiers internes).
+La base est chiffrée par SQLCipher (AES-256) avec une passphrase aléatoire protégée par
+une clé non exportable du Keystore Android. Une base créée par une version antérieure est
+migrée vers le format chiffré au premier lancement, sans perte de données.
 Rien ne quitte l'appareil : pas de télémétrie, pas de synchronisation, pas de permission
 Internet dans le manifeste. L'OCR utilise la variante bundled de ML Kit : le modèle est
 inclus dans l'APK et la reconnaissance s'exécute entièrement sur l'appareil, sans

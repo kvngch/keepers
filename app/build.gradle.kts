@@ -13,8 +13,8 @@ android {
         applicationId = "fr.kvngch.keepers"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.2.0"
+        versionCode = 5
+        versionName = "1.3.0"
         ndk {
             // APK distribue en sideload : arm64 couvre tous les telephones recents
             abiFilters += "arm64-v8a"
@@ -74,4 +74,6 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("net.zetetic:sqlcipher-android:4.6.1@aar")
+    implementation("androidx.sqlite:sqlite-ktx:2.4.0")
 }

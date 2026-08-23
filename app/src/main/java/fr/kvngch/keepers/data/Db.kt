@@ -11,6 +11,7 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import kotlinx.coroutines.flow.Flow
+import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 
 @Entity(tableName = "items")
 data class ItemEntity(
@@ -56,11 +57,14 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(context: Context): AppDb =
             instance ?: synchronized(this) {
-                instance ?: Room.databaseBuilder(
-                    context.applicationContext,
-                    AppDb::class.java,
-                    "keepers.db"
-                ).build().also { instance = it }
+                instance ?: run {
+                    System.loadLibrary("sqlcipher")
+                    val app = context.applicationContext
+                    val passphrase = DbKey.passphrase(app, app.getDatabasePath("keepers.db"))
+                    Room.databaseBuilder(app, AppDb::class.java, "keepers.db")
+                        .openHelperFactory(SupportOpenHelperFactory(passphrase))
+                        .build().also { instance = it }
+                }
             }
     }
 }
